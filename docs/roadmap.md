@@ -2,6 +2,8 @@
 
 Ordered by value for a DMZ CA. ✅ = done in v0.1.
 
+This page covers new features. Fixes and hardening of existing behaviour, such as the offline root ceremony, token expiry and a local check script, are tracked with priority, effort and complexity in [Findings & future fixes](findings-and-future-fixes.md).
+
 ## v0.1 (this release)
 - ✅ Two-tier hierarchy, name-constrained intermediate, encrypted keys at rest
 - ✅ CSR issuance, server-side keygen, profiles, policy engine

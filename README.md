@@ -97,6 +97,7 @@ For a real deployment (HTTPS, systemd, offline root) follow [docs/operations.md]
 | [API](docs/api.md) | endpoint reference with curl examples |
 | [Operations](docs/operations.md) | install, bootstrap, config reference, monitoring, backups, runbooks |
 | [Roadmap](docs/roadmap.md) | ACME, OIDC, OCSP, HSM, metrics, … |
+| [Findings & future fixes](docs/findings-and-future-fixes.md) | hardening and fixes for what exists, with priority, effort and complexity |
 | [ADRs](docs/adr/) | key design decisions (incl. [0006 pluggable storage](docs/adr/0006-pluggable-storage-backends.md)) |
 | [UML](docs/uml/) | PlantUML: use cases, components, deployment, class, sequences, state |
 
