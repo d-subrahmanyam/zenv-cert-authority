@@ -1,0 +1,14 @@
+target/
+dev-data/
+deploy/docker/secrets/
+.git/
+.github/
+.idea/
+.vscode/
+rust-toolchain.toml
+*.db
+*.db-wal
+*.db-shm
+*.pass
+*.key
+*.key.enc

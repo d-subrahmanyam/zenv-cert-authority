@@ -1,0 +1,98 @@
+# zenv-ca with the PostgreSQL backend, using the official postgres image.
+#
+#   postgres  → initdb script creates roles zenv_ca_owner / zenv_ca_app, db + schema zenv_ca
+#   init      → `zenv-ca init` as zenv_ca_owner: CA keys + tables + first admin token
+#   grants    → DML-only grants for zenv_ca_app (postgres-init/grants.sql)
+#   zenv-cad  → the daemon, connecting as zenv_ca_app
+#
+#   ./make-secrets.sh
+#   docker compose -f compose.postgres.yml up --build    # or: podman compose ...
+#   docker compose -f compose.postgres.yml logs init     # admin token (first run only)
+#
+# See README.md in this directory.
+name: zenv-ca-postgres
+
+x-zenv-ca: &zenv-ca
+  image: localhost/zenv-ca:postgres
+  build:
+    context: ../..
+    dockerfile: deploy/docker/Dockerfile.postgres
+  volumes:
+    - ca-data:/var/lib/zenv-ca
+    - ./config/zenv-ca.postgres.toml:/etc/zenv-ca/zenv-ca.toml:ro
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  postgres:
+    image: docker.io/library/postgres:18
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_superuser_password
+    secrets: [db_superuser_password, db_owner_password, db_app_password]
+    volumes:
+      - pg-data:/var/lib/postgresql
+      - ./postgres-init/10-zenv-ca.sh:/docker-entrypoint-initdb.d/10-zenv-ca.sh:ro
+    # TCP check: the temporary server that runs the init scripts listens on a socket only,
+    # so this turns healthy once the real server (with the roles in place) is up.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "zenv_ca"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    # Not published to the host. Uncomment to poke at it with psql:
+    # ports: ["127.0.0.1:5432:5432"]
+    restart: unless-stopped
+
+  init:
+    <<: *zenv-ca
+    volumes:
+      - ca-data:/var/lib/zenv-ca
+      - ./config/zenv-ca.postgres-owner.toml:/etc/zenv-ca/zenv-ca.toml:ro
+    entrypoint: ["/usr/local/bin/zenv-ca"]
+    command: ["init", "--if-needed", "--root-passphrase-file", "/run/secrets/root_passphrase"]
+    secrets: [root_passphrase, intermediate_passphrase, db_owner_password]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  grants:
+    image: docker.io/library/postgres:18
+    entrypoint: ["bash", "-c"]
+    command:
+      - >-
+        PGPASSWORD="$$(cat /run/secrets/db_owner_password)"
+        exec psql -h postgres -U zenv_ca_owner -d zenv_ca -v ON_ERROR_STOP=1 -q -f /grants.sql
+    volumes:
+      - ./postgres-init/grants.sql:/grants.sql:ro
+    secrets: [db_owner_password]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  zenv-cad:
+    <<: *zenv-ca
+    depends_on:
+      grants:
+        condition: service_completed_successfully
+    secrets: [intermediate_passphrase, db_app_password]
+    ports: ["127.0.0.1:8080:8080"]
+    restart: unless-stopped
+
+volumes:
+  ca-data:
+  pg-data:
+
+secrets:
+  root_passphrase:
+    file: ./secrets/root_passphrase
+  intermediate_passphrase:
+    file: ./secrets/intermediate_passphrase
+  db_superuser_password:
+    file: ./secrets/db_superuser_password
+  db_owner_password:
+    file: ./secrets/db_owner_password
+  db_app_password:
+    file: ./secrets/db_app_password

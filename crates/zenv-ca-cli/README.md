@@ -38,10 +38,10 @@ Every change is audited with the actor `cli:$USER`.
 ### `init`: bootstrap a new CA
 
 ```bash
-zenv-ca init [--root-passphrase-file F] [--intermediate-passphrase-file F] [--admin-name admin]
+zenv-ca init [--root-passphrase-file F] [--intermediate-passphrase-file F] [--admin-name admin] [--if-needed]
 ```
 
-1. Refuses to run if `data_dir` already holds a root certificate, or if the configured database already holds CA records (the SQLite file exists, or the PostgreSQL schema has audit entries).
+1. With `--if-needed`, exits 0 without changes when both the root certificate and the database records already exist (used by the [container stacks](../../deploy/docker/README.md)). Otherwise it refuses to run if `data_dir` already holds a root certificate, or if the configured database already holds CA records (the SQLite file exists, or the PostgreSQL schema has audit entries).
 2. Reads the root passphrase from the file, or prompts twice. Reads the intermediate passphrase from the file, the daemon's configured sources, or a prompt. Both must be at least 12 characters and must differ.
 3. Creates `data_dir`, `ca/` and `tls/` with mode 0700.
 4. Generates the root, then the intermediate with Name Constraints. Both keys are written encrypted, mode 0600.

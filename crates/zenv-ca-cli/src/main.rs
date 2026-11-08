@@ -56,6 +56,11 @@ enum Command {
         /// Name of the initial admin token.
         #[arg(long, default_value = "admin")]
         admin_name: String,
+        /// Exit successfully, changing nothing, when the CA is already fully initialised
+        /// (for container entrypoints that run on every start). A half-initialised CA
+        /// is still an error.
+        #[arg(long)]
+        if_needed: bool,
     },
     /// Manage API tokens.
     #[command(subcommand)]
@@ -196,12 +201,14 @@ fn main() -> anyhow::Result<()> {
             root_passphrase_file,
             intermediate_passphrase_file,
             admin_name,
+            if_needed,
         } => init(
             &config,
             root_passphrase_file.as_deref(),
             intermediate_passphrase_file.as_deref(),
             &admin_name,
             &actor,
+            if_needed,
         ),
         Command::Token(cmd) => token(&config, cmd, &actor),
         Command::Cert(cmd) => cert(&config, cmd, &actor),
@@ -316,8 +323,17 @@ fn init(
     inter_pass_file: Option<&Path>,
     admin_name: &str,
     actor: &str,
+    if_needed: bool,
 ) -> anyhow::Result<()> {
     let paths = &config.paths;
+    if if_needed && paths.root_cert().exists() && storage::is_provisioned(config)? {
+        println!(
+            "CA already initialised in {} ({}); nothing to do.",
+            paths.data_dir.display(),
+            storage::describe(config)
+        );
+        return Ok(());
+    }
     if paths.root_cert().exists() {
         bail!(
             "{} already contains a CA; refusing to overwrite it",

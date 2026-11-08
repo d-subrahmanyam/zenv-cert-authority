@@ -21,10 +21,10 @@ Ordered by value for a DMZ CA. ✅ = done in v0.1.
 | 4 | **Prometheus metrics** | `/metrics`: issued, revoked, expiring, auth failures | `metrics` + exporter |
 | 5 | **Expiry notifications** | email / chat webhooks before expiry | builds on the existing expiry monitor |
 | 6 | **OCSP responder** | clients that require OCSP (some Java/.NET configs) | `x509-ocsp` crate, delegated responder cert |
-| 7 | **HSM / PKCS#11** for the intermediate key | key never in process memory | `cryptoki`; SoftHSM in CI; rcgen `SigningKey` impl |
+| 7 | **HSM / PKCS#11** for the intermediate key | key never in process memory | `cryptoki`; SoftHSM in tests; rcgen `SigningKey` impl |
 | 8 | **Intermediate rotation** with overlap | verify/CRL for both old and new intermediates | multi-issuer `CertificateAuthority` |
 | 9 | Built-in **rate limiting** | defence in depth | `tower_governor` per token / IP |
 | 10 | **PKCS#7 (.p7b)** chain download | Windows / some appliances | `cms` crate |
 | 11 | ~~**PostgreSQL** backend~~ | HA / multi-instance | **Done**: `zenv-ca-store-postgres`, see [ADR 0006](adr/0006-pluggable-storage-backends.md). Next: a `zenv-ca db migrate` command to copy SQLite → PostgreSQL |
 | 12 | Approval workflow | names outside a team's scope need an admin's approval | pending → approved state |
-| 13 | Container image + Helm chart | k8s DMZ clusters | distroless, read-only rootfs |
+| 13 | Helm chart | k8s DMZ clusters | distroless images + compose stacks exist in `deploy/docker/` |

@@ -1,0 +1,30 @@
+# zenv-cad + zenv-ca, PostgreSQL backend: the database is external (see compose.postgres.yml); keys stay in /var/lib/zenv-ca.
+#
+#   podman build -f deploy/docker/Dockerfile.postgres -t zenv-ca:postgres .   (or docker build)
+#
+# Build context is the repository root. See deploy/docker/README.md.
+
+FROM docker.io/library/rust:1.99-bookworm AS build
+# aws-lc-rs (rustls crypto provider) needs cmake + clang.
+RUN apt-get update && apt-get install -y --no-install-recommends cmake clang \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+# Only the postgres store is compiled in. Cache mounts keep rebuilds incremental; the
+# binaries are copied out because the cache is not part of the image layer.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked -p zenv-ca-server -p zenv-ca-cli \
+        --no-default-features --features zenv-ca-server/postgres,zenv-ca-cli/postgres \
+    && mkdir -p /out/bin /out/data \
+    && cp target/release/zenv-cad target/release/zenv-ca /out/bin/
+
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY --from=build /out/bin/ /usr/local/bin/
+# Pre-created and owned by nonroot (65532) so a fresh named volume inherits the owner.
+COPY --from=build --chown=65532:65532 /out/data /var/lib/zenv-ca
+USER nonroot
+ENV ZENV_CA_CONFIG=/etc/zenv-ca/zenv-ca.toml
+VOLUME ["/var/lib/zenv-ca"]
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/zenv-cad"]

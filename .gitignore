@@ -10,3 +10,4 @@
 # IDE
 .idea/
 .vscode/
+/deploy/docker/secrets/

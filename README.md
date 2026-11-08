@@ -44,7 +44,7 @@ crates/
   zenv-ca-server/  zenv-cad daemon: axum API, embedded web UI (ui/), TLS
   zenv-ca-cli/     zenv-ca admin CLI: init, token, cert, tls, audit
 config/            example (prod-like) and dev configs
-deploy/            hardened systemd unit, Containerfile
+deploy/            hardened systemd unit; docker/: SQLite and PostgreSQL images + compose stacks
 docs/              architecture, use cases, flows, security, API, operations, ADRs, UML
 scripts/           diagram tooling
 ```
@@ -102,6 +102,17 @@ For a real deployment (HTTPS, systemd, offline root) follow [docs/operations.md]
 
 Diagrams: the Mermaid diagrams render inline on GitHub. `python3 scripts/build-diagram-viewer.py` regenerates [`docs/diagrams.html`](docs/diagrams.html), a single page with all of them. `scripts/render-uml.sh` renders the PlantUML sources to SVG using `plantuml`, or a container if `plantuml` isn't installed.
 
+## Run it in containers
+
+Two images and compose stacks live in [`deploy/docker/`](deploy/docker/README.md): SQLite in a single container, or PostgreSQL using the official `postgres` image with least-privilege roles. They work with Docker or Podman:
+
+```bash
+cd deploy/docker && ./make-secrets.sh
+docker compose -f compose.sqlite.yml up --build     # or compose.postgres.yml
+docker compose -f compose.sqlite.yml logs init      # first admin token
+curl http://localhost:8080/readyz
+```
+
 ## Development
 
 ```bash
@@ -121,4 +132,4 @@ Engineering conventions:
 - Every state change is audited in the same transaction.
 - Blocking work runs in `spawn_blocking`.
 - Errors are RFC 9457 problem+json, and internal details are logged, never returned.
-- CI runs fmt, clippy, tests, docs and `cargo-deny`.
+- There is no hosted CI (experimental repo). Run the commands above before pushing, plus `cargo deny check` when dependencies change.

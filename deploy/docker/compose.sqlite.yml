@@ -1,0 +1,47 @@
+# zenv-ca with the SQLite backend: a one-shot `init` service, then the daemon.
+#
+#   ./make-secrets.sh
+#   docker compose -f compose.sqlite.yml up --build      # or: podman compose ...
+#   docker compose -f compose.sqlite.yml logs init       # admin token (first run only)
+#
+# See README.md in this directory.
+name: zenv-ca-sqlite
+
+x-zenv-ca: &zenv-ca
+  image: localhost/zenv-ca:sqlite
+  build:
+    context: ../..
+    dockerfile: deploy/docker/Dockerfile.sqlite
+  volumes:
+    - ca-data:/var/lib/zenv-ca
+    - ./config/zenv-ca.sqlite.toml:/etc/zenv-ca/zenv-ca.toml:ro
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  init:
+    <<: *zenv-ca
+    entrypoint: ["/usr/local/bin/zenv-ca"]
+    # --if-needed: later `up`s leave the existing CA alone instead of failing.
+    command: ["init", "--if-needed", "--root-passphrase-file", "/run/secrets/root_passphrase"]
+    secrets: [root_passphrase, intermediate_passphrase]
+    restart: "no"
+
+  zenv-cad:
+    <<: *zenv-ca
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    secrets: [intermediate_passphrase]
+    ports: ["127.0.0.1:8080:8080"]
+    restart: unless-stopped
+
+volumes:
+  ca-data:
+
+secrets:
+  root_passphrase:
+    file: ./secrets/root_passphrase
+  intermediate_passphrase:
+    file: ./secrets/intermediate_passphrase

@@ -1,0 +1,45 @@
+# zenv-ca in a container, SQLite backend (deploy/docker/compose.sqlite.yml).
+
+[server]
+listen = "0.0.0.0:8080"
+# What clients (and the CRL Distribution Point in every certificate) use to reach the CA.
+public_url = "http://localhost:8080"
+
+[server.tls]
+# Plain HTTP for local experiments only. Put a TLS-terminating proxy in front, or enable
+# TLS and publish 8443, before anything real talks to it.
+enabled = false
+
+[paths]
+data_dir = "/var/lib/zenv-ca"
+
+[ca]
+intermediate_passphrase_file = "/run/secrets/intermediate_passphrase"
+
+[ca.root]
+validity_days = 3650
+key_algorithm = "ecdsa-p384"
+
+[ca.root.subject]
+common_name = "Zenv Container Root CA"
+organization = "Zenv"
+organizational_unit = "Experimental"
+
+[ca.intermediate]
+validity_days = 365
+key_algorithm = "ecdsa-p256"
+
+[ca.intermediate.subject]
+common_name = "Zenv Container Issuing CA"
+organization = "Zenv"
+organizational_unit = "Experimental"
+
+[policy]
+allowed_dns_suffixes = ["dmz.zenv.internal"]
+
+[logging]
+format = "pretty"
+filter = "info,tower_http=info"
+
+[database]
+backend = "sqlite"   # file: /var/lib/zenv-ca/zenv-ca.db

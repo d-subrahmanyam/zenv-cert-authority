@@ -12,6 +12,10 @@ sudo install -m 0640 -o root -g zenv-ca config/zenv-ca.example.toml /etc/zenv-ca
 sudoedit /etc/zenv-ca/zenv-ca.toml        # public_url, policy, subjects
 ```
 
+### Containers
+
+[`deploy/docker/`](../deploy/docker/README.md) has a distroless image per backend (`Dockerfile.sqlite`, `Dockerfile.postgres`) and compose stacks that run `zenv-ca init --if-needed` as a one-shot service before the daemon. The PostgreSQL stack uses the official `postgres` image and sets up the owner/app role split [described below](#postgresql-backend-optional). `init --if-needed` succeeds without changes when the CA is already fully initialised, so it is safe in an entrypoint that runs on every start.
+
 ## Bootstrap
 
 ```bash

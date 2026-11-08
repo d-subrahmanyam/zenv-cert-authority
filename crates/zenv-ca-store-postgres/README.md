@@ -74,4 +74,11 @@ Without the variable they're skipped, and only the configuration tests run. [`te
 - idempotent reopening, and refusal of newer schemas
 - fast failure on bad settings
 
-CI runs all of this against a `postgres:17` service container.
+For a throwaway server, run the official image:
+
+```bash
+docker run --rm -d --name zca-test -p 127.0.0.1:5432:5432 \
+  -e POSTGRES_USER=zenv -e POSTGRES_PASSWORD=secret -e POSTGRES_DB=zenv_test postgres:18
+```
+
+[`deploy/docker/compose.postgres.yml`](../../deploy/docker/compose.postgres.yml) runs the whole stack with the owner/app role split.
