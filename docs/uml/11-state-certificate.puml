@@ -1,0 +1,20 @@
+@startuml state-certificate
+!theme plain
+title Certificate lifecycle
+
+[*] --> Requested : CSR submitted /\nkeygen requested
+Requested --> Rejected : auth failure /\npolicy violation /\ninvalid CSR
+Rejected --> [*]
+Requested --> Active : signed by intermediate,\nrecorded + audited
+Active --> Revoked : revoke(reason)\n→ CRL re-signed
+Active --> Expired : now > notAfter
+Revoked --> Expired : now > notAfter\n(dropped from CRL)
+Expired --> [*]
+
+Active : verify → valid
+Active : status API → good
+Revoked : verify → invalid
+Revoked : listed on CRL
+Expired : verify → invalid
+Expired : renewal = new request
+@enduml

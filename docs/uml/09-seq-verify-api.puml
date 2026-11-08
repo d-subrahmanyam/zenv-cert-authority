@@ -1,0 +1,29 @@
+@startuml seq-verify-api
+!theme plain
+title UC6/UC7: Explicit verification and status check
+autonumber
+
+actor "Human / app" as X
+participant "zenv-cad" as API
+participant "CertificateAuthority.verify" as V
+database "Store" as DB
+
+X -> API : POST /api/v1/verify\n{certificate_pem | certificate_der_base64, hostname?, at?}
+API -> V : verify(input, options, store)
+V -> V : parse first CERTIFICATE (caller chain ignored)
+V -> V : signature: issuer == our intermediate\nAND signature verifies
+V -> V : chain: intermediate signed by root
+V -> V : validity at `at` (leaf + CAs)
+V -> V : leaf is not a CA
+V -> V : SANs within intermediate Name Constraints
+V -> DB : status(serial)
+DB --> V : Good | Revoked{reason} | Unknown
+note right of V : Unknown = chains to us but not\nin inventory → FAIL (fail closed)
+V -> V : optional hostname match
+V --> API : VerificationReport {valid, checks[]}
+API --> X : 200 JSON report
+
+X -> API : GET /api/v1/certificates/{serial}/status
+API -> DB : revocation_status(serial)
+API --> X : {"status":"good"|"revoked"|"unknown", reason, not_after}
+@enduml

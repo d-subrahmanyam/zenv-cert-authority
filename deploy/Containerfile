@@ -1,0 +1,14 @@
+# Multi-stage build: static-ish binaries on a distroless base, non-root, read-only rootfs friendly.
+FROM docker.io/library/rust:1.99-bookworm AS build
+RUN apt-get update && apt-get install -y --no-install-recommends cmake clang && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked --bins
+
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY --from=build /src/target/release/zenv-cad /src/target/release/zenv-ca /usr/local/bin/
+USER nonroot
+VOLUME ["/var/lib/zenv-ca"]
+EXPOSE 8443
+ENTRYPOINT ["/usr/local/bin/zenv-cad"]
+CMD ["--config", "/etc/zenv-ca/zenv-ca.toml"]

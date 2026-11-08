@@ -1,0 +1,63 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+repository = "https://example.invalid/zenv-cert-authority"
+publish = false
+
+[workspace.dependencies]
+zenv-ca-core = { path = "crates/zenv-ca-core" }
+zenv-ca-store = { path = "crates/zenv-ca-store" }
+
+rcgen = { version = "0.14", features = ["x509-parser", "pem", "crypto", "aws_lc_rs"], default-features = false }
+x509-parser = { version = "0.18", features = ["verify-aws"] }
+p12-keystore = "0.4"
+pkcs8 = { version = "0.10", features = ["encryption", "pem", "std"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+rand = "0.8"
+pem = "3"
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+zeroize = { version = "1", features = ["derive", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+axum = { version = "0.8", features = ["macros"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "limit", "set-header", "timeout"] }
+clap = { version = "4", features = ["derive", "env"] }
+rpassword = "7"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+dbg_macro = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+# Crypto (scrypt, RSA keygen) is painfully slow unoptimised; optimise deps in dev builds.
+[profile.dev.package."*"]
+opt-level = 2

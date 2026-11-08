@@ -1,0 +1,55 @@
+# Hardened systemd unit for the Zenv DMZ CA daemon.
+# Install: /etc/systemd/system/zenv-cad.service
+[Unit]
+Description=Zenv DMZ Certificate Authority daemon
+Documentation=file:///usr/share/doc/zenv-ca/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zenv-ca
+Group=zenv-ca
+ExecStart=/usr/local/bin/zenv-cad --config /etc/zenv-ca/zenv-ca.toml
+# Intermediate key passphrase, delivered as a credential (readable only by this service).
+LoadCredential=intermediate-passphrase:/etc/zenv-ca/intermediate.pass
+Environment=RUST_LOG=info
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+
+# --- sandboxing ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Use a port >1024 (default 8443) so no capabilities are needed.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+StateDirectory=zenv-ca
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/zenv-ca
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

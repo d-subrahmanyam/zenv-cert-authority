@@ -1,0 +1,65 @@
+@startuml components
+!theme plain
+title Zenv DMZ CA: Component view (Cargo workspace)
+
+actor "Browser user" as User
+actor "API client / CI" as Client
+actor "Relying party" as RP
+actor "Administrator\n(shell on CA host)" as Admin
+
+package "zenv-cad (daemon binary)" {
+  [axum Router\n+ middleware\n(CSP, HSTS, body limit,\ntimeout, tracing)] as Router
+  [Web UI\n(static, embedded)] as UI
+  [Auth extractors\n(Bearer → Principal)] as Auth
+  [Handlers\npki / certs / verify / admin] as Handlers
+  [AppState\n(CRL cache, spawn_blocking)] as State
+}
+
+package "zenv-ca (admin CLI binary)" {
+  [init / token / cert /\ntls / audit commands] as CLI
+}
+
+package "zenv-ca-core (library, no I/O)" {
+  [hierarchy\n(root, intermediate)] as Hier
+  [CertificateAuthority\n(issue, CRL)] as CA
+  [IssuancePolicy] as Policy
+  [CertProfile] as Profile
+  [verify] as Verify
+  [export\n(PEM/DER/chain/P12)] as Export
+  [keys\n(encrypted PKCS#8)] as Keys
+}
+
+package "zenv-ca-store (library)" {
+  [Store\n(inventory, tokens,\naudit, CRL number)] as Store
+}
+
+database "SQLite (WAL)\nzenv-ca.db" as DB
+folder "data_dir/ca\nroot.crt, intermediate.crt\n*.key.enc (PBES2)" as Files
+folder "data_dir/tls\nserver.chain.pem\nserver.key" as Tls
+
+User --> UI : HTTPS
+User --> Router : JSON API
+Client --> Router : JSON API
+RP --> Router : /pki/*, /verify, /status
+Admin --> CLI
+
+Router --> UI
+Router --> Handlers
+Handlers --> Auth
+Handlers --> State
+State --> CA
+State --> Store
+Handlers --> Export
+Handlers --> Verify
+CA --> Policy
+CA --> Profile
+CA --> Keys
+Verify ..> Store : RevocationLookup
+CLI --> Hier
+CLI --> Store
+CLI --> CA
+Store --> DB
+Hier --> Files
+CA ..> Files : loaded at start-up
+Router ..> Tls : rustls
+@enduml

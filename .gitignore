@@ -1,0 +1,9 @@
+/target
+*.db
+*.db-wal
+*.db-shm
+*.key
+*.key.enc
+*.p12
+*.pass
+/dev-data/

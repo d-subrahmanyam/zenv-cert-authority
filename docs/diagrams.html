@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zenv CA Diagrams</title>
+<style>
+:root { --bg:#f6f7f9; --fg:#1b1f24; --muted:#5d6673; --card:#fff; --border:#dde1e7; --accent:#2556d8; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#0f1216; --fg:#e6e9ee; --muted:#9aa4b2; --card:#171b21; --border:#2b323c; --accent:#6b93ff; } }
+:root[data-theme="dark"] { --bg:#0f1216; --fg:#e6e9ee; --muted:#9aa4b2; --card:#171b21; --border:#2b323c; --accent:#6b93ff; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,sans-serif; }
+header { padding:20px 16px 8px; max-width:1100px; margin:0 auto; }
+header h1 { margin:0; font-size:1.4rem; }
+header p { color:var(--muted); margin:4px 0 0; }
+nav { display:flex; flex-wrap:wrap; gap:6px 14px; padding:8px 16px 16px; max-width:1100px; margin:0 auto; }
+nav a { color:var(--accent); text-decoration:none; font-size:.9rem; }
+main { max-width:1100px; margin:0 auto; padding:0 16px 40px; }
+section { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:18px; overflow-x:auto; }
+section h2 { margin:0; font-size:1.05rem; }
+.src { margin:2px 0 10px; color:var(--muted); font-size:.8rem; font-family:ui-monospace,monospace; }
+.mermaid { background:transparent; margin:0; }
+</style></head>
+<body>
+<header><h1>Zenv DMZ CA: diagrams</h1>
+<p>Generated from the Mermaid blocks in docs/*.md by scripts/build-diagram-viewer.py. Formal UML (PlantUML) sources: docs/uml/*.puml.</p></header>
+<nav><a href="#d0">Use cases</a>
+<a href="#d1">UC10: Bootstrap</a>
+<a href="#d2">UC1: Issue from CSR</a>
+<a href="#d3">UC2: Server-side keygen</a>
+<a href="#d4">Runtime TLS validation</a>
+<a href="#d5">UC6: Explicit verification</a>
+<a href="#d6">UC5: Revocation &amp; CRL publication</a>
+<a href="#d7">Certificate lifecycle</a>
+<a href="#d8">3. Components</a>
+<a href="#d9">4. PKI hierarchy</a>
+<a href="#d10">5. Data model</a>
+<a href="#d11">7. Deployment</a></nav>
+<main><section id="d0"><h2>Use cases</h2><p class="src">use-cases.md</p><pre class="mermaid">flowchart LR
+    Dev([&quot;👤 App team / Developer&quot;])
+    CI([&quot;⚙️ CI/CD pipeline&quot;])
+    Admin([&quot;🛡️ CA administrator&quot;])
+    RP([&quot;🖥️ Relying party&lt;br/&gt;(DMZ client/server)&quot;])
+    Aud([&quot;🔎 Security auditor&quot;])
+
+    subgraph CA[&quot;Zenv DMZ Certificate Authority&quot;]
+        UC1([&quot;UC1 Request certificate from CSR&quot;])
+        UC2([&quot;UC2 Generate key + certificate&quot;])
+        UC3([&quot;UC3 Download certificate&lt;br/&gt;PEM · DER · chain · PKCS#12&quot;])
+        UC4([&quot;UC4 List my certificates&quot;])
+        UC5([&quot;UC5 Revoke certificate&quot;])
+        UC6([&quot;UC6 Verify a certificate&quot;])
+        UC7([&quot;UC7 Check revocation status&quot;])
+        UC8([&quot;UC8 Fetch CRL&quot;])
+        UC9([&quot;UC9 Download trust anchors&quot;])
+        UC10([&quot;UC10 Bootstrap CA hierarchy&quot;])
+        UC11([&quot;UC11 Manage API tokens&quot;])
+        UC12([&quot;UC12 Review / verify audit log&quot;])
+        UC13([&quot;UC13 Renew daemon TLS cert&quot;])
+        POL{{&quot;«include» Enforce issuance policy&quot;}}
+        AUTH{{&quot;«include» Authenticate token&quot;}}
+        AUD{{&quot;«include» Hash-chained audit entry&quot;}}
+    end
+
+    Dev --&gt; UC1 &amp; UC2 &amp; UC3 &amp; UC4 &amp; UC5 &amp; UC6
+    CI --&gt; UC1 &amp; UC3
+    RP --&gt; UC6 &amp; UC7 &amp; UC8 &amp; UC9
+    Admin --&gt; UC5 &amp; UC10 &amp; UC11 &amp; UC12 &amp; UC13
+    Aud --&gt; UC12
+
+    UC1 -.-&gt; POL &amp; AUTH &amp; AUD
+    UC2 -.-&gt; POL &amp; AUTH &amp; AUD
+    UC5 -.-&gt; AUTH &amp; AUD
+    UC11 -.-&gt; AUD
+</pre></section>
+<section id="d1"><h2>UC10: Bootstrap</h2><p class="src">flows.md</p><pre class="mermaid">sequenceDiagram
+    autonumber
+    actor Admin
+    participant CLI as zenv-ca CLI
+    participant Core as zenv-ca-core
+    participant FS as data_dir
+    participant DB as SQLite store
+    Admin-&gt;&gt;CLI: zenv-ca init --root-passphrase-file …
+    CLI-&gt;&gt;CLI: refuse if CA exists · passphrases ≥12 chars and different
+    CLI-&gt;&gt;FS: create data/, ca/, tls/ (0700)
+    CLI-&gt;&gt;Core: create_root (P-384, pathLen=1, 10y)
+    CLI-&gt;&gt;FS: root.crt + root.key.enc (PBES2, 0600)
+    CLI-&gt;&gt;Core: create_intermediate (pathLen=0, Name Constraints, ≤ root expiry)
+    CLI-&gt;&gt;FS: intermediate.crt + intermediate.key.enc
+    CLI-&gt;&gt;Core: CertificateAuthority::load (key↔cert + chain check)
+    CLI-&gt;&gt;DB: migrate · audit &quot;ca.initialised&quot;
+    CLI-&gt;&gt;Core: issue daemon TLS cert
+    CLI-&gt;&gt;FS: tls/server.chain.pem + server.key (0600)
+    CLI-&gt;&gt;DB: create admin token (hash only)
+    CLI--&gt;&gt;Admin: root SHA-256 · admin token (once) · &quot;move root key offline&quot;
+</pre></section>
+<section id="d2"><h2>UC1: Issue from CSR</h2><p class="src">flows.md</p><pre class="mermaid">sequenceDiagram
+    autonumber
+    actor Dev as Developer / CI
+    participant Tool as openssl
+    participant API as zenv-cad (router + auth)
+    participant CA as CertificateAuthority
+    participant Pol as IssuancePolicy
+    participant DB as Store
+    Dev-&gt;&gt;Tool: generate key + CSR locally
+    Note right of Tool: private key never leaves the requester
+    Dev-&gt;&gt;API: POST /api/v1/certificates (Bearer token, csr_pem, profile)
+    API-&gt;&gt;DB: authenticate(sha256(token))
+    alt invalid token
+        API--&gt;&gt;Dev: 401 problem+json
+    end
+    API-&gt;&gt;CA: issue_from_csr (spawn_blocking)
+    CA-&gt;&gt;CA: parse CSR + verify self-signature
+    CA-&gt;&gt;Pol: resolve_validity · check_names
+    alt policy violation
+        CA--&gt;&gt;API: Policy error
+        API--&gt;&gt;Dev: 403 policy-violation
+    end
+    CA-&gt;&gt;CA: params from PROFILE (KU, EKU, CA:FALSE, CRL DP, random serial)
+    CA-&gt;&gt;CA: sign with intermediate
+    CA-&gt;&gt;DB: tx { insert certificate · audit &quot;certificate.issued&quot; }
+    API--&gt;&gt;Dev: 201 Created + Location
+    Dev-&gt;&gt;API: GET …/{serial}/download?format=chain
+    API--&gt;&gt;Dev: leaf + intermediate PEM
+</pre></section>
+<section id="d3"><h2>UC2: Server-side keygen</h2><p class="src">flows.md</p><pre class="mermaid">sequenceDiagram
+    autonumber
+    actor U as User
+    participant UI as Web UI
+    participant API as zenv-cad
+    participant CA as CertificateAuthority
+    participant DB as Store
+    U-&gt;&gt;UI: names, profile, algorithm, PKCS#12 password
+    UI-&gt;&gt;API: POST /api/v1/certificates/keygen
+    API-&gt;&gt;CA: issue_with_generated_key
+    CA-&gt;&gt;CA: keygen allowed? → generate key → policy → sign
+    API-&gt;&gt;API: build PKCS#12 (AES-256-CBC, HMAC-SHA256)
+    alt weak password
+        API--&gt;&gt;UI: 422, nothing recorded
+    end
+    API-&gt;&gt;DB: tx { insert (method=keygen) · audit }
+    API--&gt;&gt;UI: 201 {certificate, private_key_pem, pkcs12_base64} · no-store
+    Note over API: key dropped &amp; zeroized: CA keeps no copy
+    UI--&gt;&gt;U: .p12 / .key downloads (Blob, client-side)
+</pre></section>
+<section id="d4"><h2>Runtime TLS validation</h2><p class="src">flows.md</p><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant C as Client (root.crt in trust store)
+    participant S as DMZ server (leaf + intermediate)
+    participant CA as zenv-cad /pki/crl.der
+    C-&gt;&gt;S: ClientHello (SNI)
+    S--&gt;&gt;C: Certificate chain
+    rect rgba(127,127,127,0.12)
+    Note over C: local path validation
+    C-&gt;&gt;C: chain → root · signatures · validity
+    C-&gt;&gt;C: pathLen · KU/EKU · Name Constraints
+    C-&gt;&gt;C: host name ∈ SANs
+    end
+    opt revocation checking
+        C-&gt;&gt;CA: GET CRL (cached until nextUpdate)
+        CA--&gt;&gt;C: CRL signed by intermediate
+        C-&gt;&gt;C: serial not listed?
+    end
+    C-&gt;&gt;S: continue or abort handshake
+</pre></section>
+<section id="d5"><h2>UC6: Explicit verification</h2><p class="src">flows.md</p><pre class="mermaid">sequenceDiagram
+    autonumber
+    actor X as Human / app
+    participant API as zenv-cad
+    participant V as verify()
+    participant DB as Store
+    X-&gt;&gt;API: POST /api/v1/verify {certificate_pem, hostname?}
+    API-&gt;&gt;V: verify(input, options, store)
+    V-&gt;&gt;V: parse · signature by our intermediate · chain to root
+    V-&gt;&gt;V: validity · not a CA · Name Constraints
+    V-&gt;&gt;DB: status(serial)
+    DB--&gt;&gt;V: Good / Revoked / Unknown
+    V-&gt;&gt;V: hostname match (optional)
+    API--&gt;&gt;X: {valid, checks[]}
+</pre></section>
+<section id="d6"><h2>UC5: Revocation &amp; CRL publication</h2><p class="src">flows.md</p><pre class="mermaid">sequenceDiagram
+    autonumber
+    actor O as Owner / Admin
+    participant API as zenv-cad
+    participant St as CRL cache
+    participant CA as CertificateAuthority
+    participant DB as Store
+    participant RP as Relying party
+    O-&gt;&gt;API: POST …/{serial}/revoke {reason}
+    API-&gt;&gt;DB: owner or admin? (else 404)
+    API-&gt;&gt;DB: tx { mark revoked · audit }
+    API-&gt;&gt;St: refresh_crl
+    St-&gt;&gt;DB: crl_entries · next_crl_number
+    St-&gt;&gt;CA: build_crl → signed CRL
+    API--&gt;&gt;O: 200 revoked
+    Note over DB: CLI revocations: cache keyed on revocation revision
+    RP-&gt;&gt;API: GET /pki/crl.der
+    API-&gt;&gt;St: current_crl (fresh &amp; unchanged? else re-sign)
+    API--&gt;&gt;RP: application/pkix-crl
+</pre></section>
+<section id="d7"><h2>Certificate lifecycle</h2><p class="src">flows.md</p><pre class="mermaid">stateDiagram-v2
+    [*] --&gt; Requested: CSR / keygen
+    Requested --&gt; Rejected: auth / policy / bad CSR
+    Rejected --&gt; [*]
+    Requested --&gt; Active: signed, recorded, audited
+    Active --&gt; Revoked: revoke(reason) → CRL re-signed
+    Active --&gt; Expired: now &gt; notAfter
+    Revoked --&gt; Expired: now &gt; notAfter (dropped from CRL)
+    Expired --&gt; [*]
+</pre></section>
+<section id="d8"><h2>3. Components</h2><p class="src">architecture.md</p><pre class="mermaid">flowchart TB
+    subgraph clients[Clients]
+        B[Browser UI user]
+        A[API client / CI]
+        R[Relying party]
+        Adm[Admin shell]
+    end
+    subgraph daemon[&quot;zenv-cad (daemon)&quot;]
+        Router[&quot;axum router&lt;br/&gt;CSP · HSTS · body limit · timeout · tracing&quot;]
+        UI[&quot;Embedded web UI&lt;br/&gt;(static HTML/JS/CSS)&quot;]
+        Auth[&quot;Auth extractors&lt;br/&gt;Bearer → Principal&quot;]
+        H[&quot;Handlers: pki · certs · verify · admin&quot;]
+        State[&quot;AppState&lt;br/&gt;CRL cache · spawn_blocking&quot;]
+    end
+    CLI[&quot;zenv-ca (admin CLI)&quot;]
+    subgraph core[&quot;zenv-ca-core (pure, no I/O)&quot;]
+        CA[CertificateAuthority]
+        Pol[IssuancePolicy]
+        Prof[CertProfile]
+        Ver[verify]
+        Exp[export]
+        Keys[keys]
+        Hier[hierarchy]
+    end
+    Store[&quot;zenv-ca-store&lt;br/&gt;inventory · tokens · audit&quot;]
+    DB[(SQLite WAL)]
+    Files[[&quot;data_dir/ca&lt;br/&gt;certs + encrypted keys&quot;]]
+
+    B --&gt; UI
+    B &amp; A &amp; R --&gt; Router
+    Router --&gt; H --&gt; Auth
+    H --&gt; State --&gt; CA &amp; Store
+    H --&gt; Ver &amp; Exp
+    CA --&gt; Pol &amp; Prof &amp; Keys
+    Adm --&gt; CLI --&gt; Hier &amp; Store &amp; CA
+    Store --&gt; DB
+    Hier --&gt; Files
+</pre></section>
+<section id="d9"><h2>4. PKI hierarchy</h2><p class="src">architecture.md</p><pre class="mermaid">flowchart TD
+    Root[&quot;&lt;b&gt;Zenv DMZ Root CA&lt;/b&gt;&lt;br/&gt;ECDSA P-384 · 10 years · pathLen=1&lt;br/&gt;&lt;i&gt;key offline after init&lt;/i&gt;&quot;]
+    Int[&quot;&lt;b&gt;Zenv DMZ Issuing CA 1&lt;/b&gt;&lt;br/&gt;ECDSA P-384 · 3 years · pathLen=0&lt;br/&gt;Name Constraints: permitted DNS dmz.zenv.internal&lt;br/&gt;&lt;i&gt;key online, encrypted at rest&lt;/i&gt;&quot;]
+    L1[&quot;shop.dmz.zenv.internal&lt;br/&gt;server · 30 days&quot;]
+    L2[&quot;billing-client&lt;br/&gt;client · 30 days&quot;]
+    L3[&quot;api.dmz.zenv.internal&lt;br/&gt;server+client · 90 days max&quot;]
+    Root --&gt; Int --&gt; L1 &amp; L2 &amp; L3
+</pre></section>
+<section id="d10"><h2>5. Data model</h2><p class="src">architecture.md</p><pre class="mermaid">erDiagram
+    certificates {
+        TEXT serial PK &quot;128-bit hex&quot;
+        TEXT common_name
+        TEXT dns_names &quot;JSON&quot;
+        TEXT ip_addresses &quot;JSON&quot;
+        TEXT profile
+        TEXT key_algorithm
+        TEXT issuance_method &quot;csr | keygen&quot;
+        TEXT requested_by &quot;token name&quot;
+        INTEGER not_before
+        INTEGER not_after
+        TEXT fingerprint_sha256 UK
+        TEXT cert_pem
+        INTEGER created_at
+        INTEGER revoked_at &quot;nullable&quot;
+        TEXT revocation_reason &quot;nullable&quot;
+        TEXT revoked_by &quot;nullable&quot;
+    }
+    api_tokens {
+        INTEGER id PK
+        TEXT name UK
+        TEXT role &quot;requester | admin&quot;
+        TEXT token_hash UK &quot;SHA-256&quot;
+        TEXT token_prefix
+        INTEGER created_at
+        INTEGER last_used_at
+        INTEGER disabled_at
+    }
+    audit_log {
+        INTEGER id PK
+        INTEGER ts
+        TEXT actor
+        TEXT action
+        TEXT target
+        TEXT details &quot;JSON&quot;
+        TEXT prev_hash
+        TEXT hash UK
+    }
+    crl_state {
+        INTEGER id PK &quot;always 1&quot;
+        INTEGER crl_number
+    }
+    api_tokens ||--o{ certificates : &quot;requested_by = name&quot;
+    api_tokens ||--o{ audit_log : &quot;actor = name&quot;
+    certificates ||--o{ audit_log : &quot;target = serial&quot;
+</pre></section>
+<section id="d11"><h2>7. Deployment</h2><p class="src">architecture.md</p><pre class="mermaid">flowchart LR
+    subgraph vault[Offline vault]
+        RK[root.key.enc + passphrase]
+    end
+    subgraph host[&quot;CA host (DMZ mgmt VLAN)&quot;]
+        SVC[&quot;systemd zenv-cad&lt;br/&gt;User=zenv-ca, sandboxed&quot;]
+        DATA[(&quot;/var/lib/zenv-ca&lt;br/&gt;0700&quot;)]
+        CRED[&quot;LoadCredential=&lt;br/&gt;intermediate-passphrase&quot;]
+        SVC --&gt; DATA
+        CRED --&gt; SVC
+    end
+    subgraph dmz[DMZ app hosts]
+        APP[&quot;apps: leaf + chain&lt;br/&gt;trust store: root.crt&quot;]
+    end
+    DEV[Dev / CI] -- &quot;HTTPS :8443&lt;br/&gt;Bearer token&quot; --&gt; SVC
+    APP -- &quot;GET /pki/crl.der&quot; --&gt; SVC
+    SVC -- &quot;JSON logs&quot; --&gt; SIEM[(SIEM)]
+    RK -. &quot;init / intermediate rotation only&quot; .-&gt; host
+</pre></section></main>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+mermaid.initialize({ startOnLoad: true, theme: dark ? 'dark' : 'default', securityLevel: 'strict' });
+</script>
+</body></html>

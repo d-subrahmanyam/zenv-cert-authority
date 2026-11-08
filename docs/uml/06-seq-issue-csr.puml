@@ -1,0 +1,40 @@
+@startuml seq-issue-csr
+!theme plain
+title UC1: Issue a certificate from a CSR (recommended path)
+autonumber
+
+actor "Developer / CI" as Dev
+participant "openssl / keytool" as Tool
+participant "zenv-cad\nRouter + Auth" as API
+participant "AppState\n(spawn_blocking)" as St
+participant "CertificateAuthority" as CA
+participant "IssuancePolicy" as Pol
+database "Store" as DB
+
+Dev -> Tool : generate key pair + CSR locally
+note right : private key never leaves\nthe requester's machine
+Tool --> Dev : app.key, app.csr
+Dev -> API : POST /api/v1/certificates\nAuthorization: Bearer zca_…\n{csr_pem, profile, validity_days}
+API -> DB : authenticate(sha256(token))
+alt token unknown / disabled
+  API --> Dev : 401 problem+json
+end
+API -> St : blocking(issue)
+St -> CA : issue_from_csr(request)
+CA -> CA : parse CSR, verify its self-signature
+CA -> Pol : resolve_validity(days)
+CA -> Pol : check_names(SANs)\nsuffix match on label boundary,\nno wildcard unless allowed
+alt policy violation
+  CA --> API : CaError::Policy
+  API --> Dev : 403 policy-violation
+end
+CA -> CA : build params from PROFILE only\n(KU, EKU, CA:FALSE, CRL DP,\n128-bit random serial, AKI)
+CA -> CA : sign with intermediate key
+CA --> St : IssuedCertificate
+St -> DB : BEGIN; insert certificate;\naudit "certificate.issued"; COMMIT
+St --> API : CertificateRecord
+API --> Dev : 201 Created + Location\n{serial, not_after, cert_pem, …}
+Dev -> API : GET /api/v1/certificates/{serial}/download?format=chain
+API --> Dev : leaf + intermediate (PEM)
+Dev -> Dev : deploy app.key + chain to the DMZ app
+@enduml

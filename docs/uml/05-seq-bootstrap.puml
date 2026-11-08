@@ -1,0 +1,33 @@
+@startuml seq-bootstrap
+!theme plain
+title UC10: Bootstrap the CA hierarchy (zenv-ca init)
+autonumber
+
+actor Admin
+participant "zenv-ca CLI" as CLI
+participant "hierarchy" as H
+participant "keys" as K
+participant "CertificateAuthority" as CA
+database "Store (SQLite)" as DB
+collections "data_dir" as FS
+
+Admin -> CLI : zenv-ca init --root-passphrase-file …
+CLI -> CLI : refuse if a CA already exists
+CLI -> CLI : read root + intermediate passphrases\n(≥12 chars, must differ)
+CLI -> FS : mkdir data/, ca/, tls/ (0700)
+CLI -> H : create_root(spec)\nP-384, pathLen=1, 10y
+H --> CLI : root cert + key
+CLI -> K : encrypt_private_key(root, pass)\nPBES2/PBKDF2-SHA256/AES-256
+CLI -> FS : root.crt (0644), root.key.enc (0600)
+CLI -> H : create_intermediate(root, spec, policy)\npathLen=0, Name Constraints = policy suffixes,\nnotAfter ≤ root notAfter
+H --> CLI : intermediate cert + key
+CLI -> FS : intermediate.crt, intermediate.key.enc
+CLI -> CA : load(root, intermediate, decrypt(key))\n(round-trip check: key↔cert, chain)
+CLI -> DB : open + migrate schema
+CLI -> DB : audit "ca.initialised"
+CLI -> CA : issue_with_generated_key(daemon TLS names)
+CLI -> DB : insert_certificate (+ audit)
+CLI -> FS : tls/server.chain.pem, tls/server.key (0600)
+CLI -> DB : create_token(admin) (+ audit)
+CLI --> Admin : root SHA-256 fingerprint,\nadmin token (shown once),\n"move root.key.enc offline"
+@enduml

@@ -1,0 +1,71 @@
+@startuml use-cases
+!theme plain
+title Zenv DMZ CA: Use cases
+left to right direction
+skinparam packageStyle rectangle
+skinparam actorStyle awesome
+
+actor "App team /\nDeveloper" as Dev
+actor "CI/CD pipeline" as CI
+actor "CA administrator" as Admin
+actor "Relying party\n(DMZ client / server)" as RP
+actor "Security auditor" as Auditor
+
+rectangle "Zenv DMZ Certificate Authority" {
+  usecase "UC1 Request certificate\nfrom CSR" as UC1
+  usecase "UC2 Generate key +\ncertificate (keygen)" as UC2
+  usecase "UC3 Download certificate\n(PEM / DER / chain / PKCS#12)" as UC3
+  usecase "UC4 List my certificates" as UC4
+  usecase "UC5 Revoke certificate" as UC5
+  usecase "UC6 Verify a certificate" as UC6
+  usecase "UC7 Check revocation status\n(status API)" as UC7
+  usecase "UC8 Fetch CRL" as UC8
+  usecase "UC9 Download trust anchors\n(root / chain)" as UC9
+  usecase "UC10 Bootstrap CA hierarchy" as UC10
+  usecase "UC11 Manage API tokens" as UC11
+  usecase "UC12 Review / verify\naudit log" as UC12
+  usecase "UC13 Renew daemon\nTLS certificate" as UC13
+
+  usecase "Enforce issuance policy\n(names, lifetime, profile)" as POL
+  usecase "Authenticate bearer token" as AUTH
+  usecase "Append hash-chained\naudit entry" as AUD
+}
+
+Dev --> UC1
+Dev --> UC2
+Dev --> UC3
+Dev --> UC4
+Dev --> UC5
+Dev --> UC6
+CI --> UC1
+CI --> UC3
+RP --> UC6
+RP --> UC7
+RP --> UC8
+RP --> UC9
+Admin --> UC5
+Admin --> UC10
+Admin --> UC11
+Admin --> UC12
+Admin --> UC13
+Auditor --> UC12
+
+UC1 ..> POL : <<include>>
+UC2 ..> POL : <<include>>
+UC1 ..> AUTH : <<include>>
+UC2 ..> AUTH : <<include>>
+UC4 ..> AUTH : <<include>>
+UC5 ..> AUTH : <<include>>
+UC1 ..> AUD : <<include>>
+UC2 ..> AUD : <<include>>
+UC5 ..> AUD : <<include>>
+UC11 ..> AUD : <<include>>
+UC3 <.. UC2 : <<extend>>\nPKCS#12 only here
+UC8 <.. UC5 : <<extend>>\nCRL re-signed
+
+note right of UC6
+  Public: no token required.
+  Trust comes only from the
+  CA's own root + intermediate.
+end note
+@enduml

@@ -1,0 +1,46 @@
+@startuml deployment
+!theme plain
+title Zenv DMZ CA: Deployment view
+
+node "Offline vault / HSM\n(air-gapped)" as Vault {
+  artifact "root.key.enc" as RootKey
+  artifact "root passphrase" as RootPass
+}
+
+node "CA host (DMZ management VLAN)" as Host {
+  node "systemd: zenv-cad.service\nUser=zenv-ca, hardened sandbox" as Svc {
+    component "zenv-cad" as Daemon
+  }
+  component "zenv-ca CLI" as Cli
+  folder "/var/lib/zenv-ca (0700)" as Data {
+    artifact "intermediate.key.enc"
+    artifact "root.crt / intermediate.crt"
+    database "zenv-ca.db"
+  }
+  artifact "/etc/zenv-ca/zenv-ca.toml" as Conf
+  artifact "systemd credential\nintermediate-passphrase" as Cred
+}
+
+node "DMZ application hosts" as Apps {
+  component "App server\n(nginx / Java / Go ...)" as App
+  artifact "leaf cert + chain\n(+ private key)" as Leaf
+  artifact "OS / app trust store\n(contains root.crt)" as Trust
+}
+
+node "Developer / CI runner" as Dev {
+  component "Browser / curl / pipeline" as Tool
+}
+
+node "Log platform / SIEM" as Siem
+
+Tool --> Daemon : HTTPS :8443\nBearer token
+App --> Daemon : HTTPS GET /pki/crl.der\n(CRL distribution point)
+Daemon --> Data
+Daemon --> Conf
+Daemon --> Cred
+Cli --> Data
+Daemon --> Siem : JSON logs (journald)
+RootKey ..> Host : used only for init /\nintermediate rotation
+App --> Leaf
+App --> Trust
+@enduml

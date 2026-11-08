@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zenv DMZ CA</title>
+  <link rel="stylesheet" href="/ui/style.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.6 8 11 4.6-1.4 8-6 8-11V5l-8-3Zm-1.2 13.6-3.5-3.5 1.4-1.4 2.1 2.1 4.6-4.6 1.4 1.4-6 6Z"/></svg>
+      <span class="brand-name">Zenv DMZ Certificate Authority</span>
+      <span class="badge badge-warn" title="Certificates from this CA must never be trusted in production">Non-production</span>
+    </div>
+    <div id="session" class="session"></div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" data-tab="request" aria-selected="true">Request</button>
+    <button role="tab" data-tab="certs">My certificates</button>
+    <button role="tab" data-tab="verify">Verify</button>
+    <button role="tab" data-tab="trust">Trust &amp; CRL</button>
+    <button role="tab" data-tab="audit" hidden>Audit</button>
+  </nav>
+
+  <main>
+    <!-- Sign-in (inserted in front of panels that need it) -->
+    <template id="signin-template">
+      <form class="card signin" data-signin>
+        <h2>Sign in</h2>
+        <p class="muted">Paste the API token your CA administrator gave you. It is kept only in this browser tab's session storage.</p>
+        <label>API token <input type="password" name="token" autocomplete="off" placeholder="zca_…" required></label>
+        <button class="btn btn-primary" type="submit">Sign in</button>
+      </form>
+    </template>
+
+    <!-- REQUEST -->
+    <section role="tabpanel" data-panel="request">
+      <div data-needs-auth>
+        <div class="segmented" role="radiogroup" aria-label="Issuance method">
+          <button type="button" role="radio" aria-checked="true" data-mode="csr">I have a CSR <span class="pill">recommended</span></button>
+          <button type="button" role="radio" aria-checked="false" data-mode="keygen">Generate the key for me</button>
+        </div>
+
+        <form id="csr-form" class="card" data-mode-panel="csr">
+          <h2>Submit a certificate signing request</h2>
+          <p class="muted">Your private key never leaves your machine. Only the CSR's public key and names are used; everything else is set by policy.</p>
+          <label>CSR (PEM)
+            <textarea name="csr_pem" rows="8" spellcheck="false" placeholder="-----BEGIN CERTIFICATE REQUEST-----" required></textarea>
+          </label>
+          <label class="file">…or load a file <input type="file" name="csr_file" accept=".csr,.pem,.req,.txt"></label>
+          <div class="row">
+            <label>Profile <select name="profile" data-profiles></select></label>
+            <label>Validity (days) <input type="number" name="validity_days" min="1" data-validity></label>
+          </div>
+          <details class="helper">
+            <summary>Need a CSR? Generate the OpenSSL command</summary>
+            <label>DNS names (one per line) <textarea id="helper-names" rows="2" spellcheck="false" placeholder="app.dmz.zenv.internal"></textarea></label>
+            <div class="code-wrap"><pre><code id="helper-cmd"></code></pre><button type="button" class="btn btn-small copy" data-copy="#helper-cmd">Copy</button></div>
+          </details>
+          <button class="btn btn-primary" type="submit">Issue certificate</button>
+        </form>
+
+        <form id="keygen-form" class="card" data-mode-panel="keygen" hidden>
+          <h2>Generate key and certificate</h2>
+          <p class="callout">The CA generates the key, returns it to you <strong>once</strong>, and keeps no copy. Prefer a CSR when your tooling allows it.</p>
+          <label>DNS names (one per line) <textarea name="dns_names" rows="3" spellcheck="false" placeholder="app.dmz.zenv.internal" required></textarea></label>
+          <label>IP addresses (optional, one per line) <textarea name="ip_addresses" rows="1" spellcheck="false" placeholder="10.20.1.15"></textarea></label>
+          <div class="row">
+            <label>Profile <select name="profile" data-profiles></select></label>
+            <label>Key algorithm <select name="key_algorithm" data-algorithms></select></label>
+            <label>Validity (days) <input type="number" name="validity_days" min="1" data-validity></label>
+          </div>
+          <div class="row">
+            <label>PKCS#12 password <input type="password" name="pkcs12_password" minlength="8" autocomplete="new-password" required></label>
+            <label>Confirm password <input type="password" name="pkcs12_confirm" minlength="8" autocomplete="new-password" required></label>
+          </div>
+          <button class="btn btn-primary" type="submit">Generate &amp; issue</button>
+        </form>
+
+        <div id="issue-result" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- CERTIFICATES -->
+    <section role="tabpanel" data-panel="certs" hidden>
+      <div data-needs-auth>
+        <form id="cert-filter" class="toolbar">
+          <input type="search" name="search" placeholder="Search name…" aria-label="Search">
+          <select name="status" aria-label="Status">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="revoked">Revoked</option>
+            <option value="expired">Expired</option>
+          </select>
+          <button class="btn" type="submit">Refresh</button>
+        </form>
+        <div class="table-wrap">
+          <table id="cert-table">
+            <thead><tr><th>Name</th><th>Serial</th><th>Profile</th><th>Status</th><th>Expires</th><th>Owner</th><th class="actions">Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p id="cert-empty" class="muted center" hidden>No certificates yet.</p>
+      </div>
+    </section>
+
+    <!-- VERIFY -->
+    <section role="tabpanel" data-panel="verify" hidden>
+      <form id="verify-form" class="card">
+        <h2>Verify a certificate</h2>
+        <p class="muted">Checks signature, chain, validity, name constraints and live revocation status against this CA. No sign-in needed.</p>
+        <label>Certificate (PEM) <textarea name="certificate_pem" rows="8" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea></label>
+        <label class="file">…or load a PEM / DER file <input type="file" name="cert_file" accept=".pem,.crt,.cer,.der"></label>
+        <label>Expected host name (optional) <input type="text" name="hostname" placeholder="app.dmz.zenv.internal"></label>
+        <button class="btn btn-primary" type="submit">Verify</button>
+      </form>
+      <div id="verify-result" aria-live="polite"></div>
+    </section>
+
+    <!-- TRUST -->
+    <section role="tabpanel" data-panel="trust" hidden>
+      <div class="grid">
+        <div class="card">
+          <h2>Trust anchors</h2>
+          <p class="muted">Install the <strong>root</strong> in the trust store of DMZ clients. Servers should present their certificate <em>with</em> the intermediate (the "chain" download).</p>
+          <ul class="links">
+            <li><a href="/pki/root.crt">Root CA (PEM)</a> · <a href="/pki/root.der">DER</a></li>
+            <li><a href="/pki/intermediate.crt">Intermediate CA (PEM)</a></li>
+            <li><a href="/pki/chain.pem">CA bundle: intermediate + root (PEM)</a></li>
+            <li><a href="/pki/crl.der">CRL (DER)</a> · <a href="/pki/crl.pem">PEM</a></li>
+          </ul>
+          <dl class="kv" id="ca-facts"></dl>
+        </div>
+        <div class="card">
+          <h2>Install the root</h2>
+          <div id="snippets"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- AUDIT -->
+    <section role="tabpanel" data-panel="audit" hidden>
+      <div data-needs-auth>
+        <div class="toolbar">
+          <button class="btn" id="audit-refresh" type="button">Refresh</button>
+          <button class="btn" id="audit-verify" type="button">Verify hash chain</button>
+          <span id="audit-status"></span>
+        </div>
+        <div class="table-wrap">
+          <table id="audit-table">
+            <thead><tr><th>#</th><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="revoke-dialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Revoke certificate</h2>
+      <p>Revocation is permanent. Serial <code id="revoke-serial"></code> will be published on the CRL immediately.</p>
+      <label>Reason
+        <select name="reason">
+          <option value="superseded">Superseded (replaced by a new certificate)</option>
+          <option value="cessation-of-operation">Cessation of operation (service retired)</option>
+          <option value="key-compromise">Key compromise</option>
+          <option value="affiliation-changed">Affiliation changed</option>
+          <option value="unspecified">Unspecified</option>
+        </select>
+      </label>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel" formnovalidate>Cancel</button>
+        <button class="btn btn-danger" value="confirm">Revoke</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

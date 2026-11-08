@@ -1,0 +1,39 @@
+@startuml seq-revocation
+!theme plain
+title UC5: Revocation and CRL publication
+autonumber
+
+actor "Owner (UI/API)" as O
+actor "Admin (CLI)" as A
+participant "zenv-cad" as API
+participant "AppState\nCRL cache" as St
+participant "CertificateAuthority" as CA
+database "Store" as DB
+participant "Relying party" as RP
+
+== Via API (owner or admin) ==
+O -> API : POST /certificates/{serial}/revoke {reason}
+API -> DB : owner == principal OR admin? (else 404)
+API -> DB : BEGIN; set revoked_at, reason;\naudit "certificate.revoked"; COMMIT
+API -> St : refresh_crl()
+St -> DB : crl_entries() (revoked & not expired)
+St -> DB : next_crl_number() (+ audit "crl.generated")
+St -> CA : build_crl(entries, number, validity)
+CA --> St : CRL signed by intermediate
+API --> O : 200 {status: revoked}
+
+== Via CLI (out of band) ==
+A -> DB : zenv-ca cert revoke SERIAL --reason key-compromise
+note over St : cache is keyed on revocation_revision\n(count, max revoked_at), so the next\nfetch notices the change
+
+== Distribution ==
+RP -> API : GET /pki/crl.der
+API -> St : current_crl()
+St -> DB : revocation_revision()
+alt cache fresh AND revision unchanged
+  St --> API : cached CRL
+else stale or changed
+  St -> St : refresh_crl()
+end
+API --> RP : application/pkix-crl
+@enduml

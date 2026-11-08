@@ -1,0 +1,30 @@
+[package]
+name = "zenv-ca-cli"
+description = "Admin CLI for the Zenv DMZ CA (zenv-ca): bootstrap, tokens, revocation, audit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "zenv-ca"
+path = "src/main.rs"
+
+[dependencies]
+zenv-ca-core.workspace = true
+zenv-ca-store.workspace = true
+zenv-ca-server = { path = "../zenv-ca-server" }
+anyhow.workspace = true
+clap.workspace = true
+rpassword.workspace = true
+serde_json.workspace = true
+time.workspace = true
+zeroize.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

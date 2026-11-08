@@ -1,0 +1,127 @@
+@startuml class-domain
+!theme plain
+title Zenv DMZ CA: Core domain model
+hide empty members
+
+package zenv_ca_core {
+  class CertificateAuthority {
+    - issuer : Issuer<KeyPair>
+    - root_der / intermediate_der
+    - policy : IssuancePolicy
+    - crl_url : Option<String>
+    + load(root_pem, inter_pem, key, policy, crl_url) : Result<Self>
+    + issue_from_csr(CsrRequest) : Result<IssuedCertificate>
+    + issue_with_generated_key(KeygenRequest) : Result<(IssuedCertificate, KeyPair)>
+    + build_crl(entries, number, validity) : Result<CrlDocument>
+    + verify(input, VerifyOptions, &dyn RevocationLookup) : VerificationReport
+  }
+
+  class IssuancePolicy {
+    + allowed_dns_suffixes : Vec<String>
+    + allowed_ip_networks : Vec<String>
+    + default_validity_days : u32
+    + max_validity_days : u32
+    + allow_wildcards : bool
+    + allow_server_side_keygen : bool
+    + max_sans : usize
+    + check_names(dns, ips) : Result<Vec<String>>
+    + resolve_validity(Option<u32>) : Result<u32>
+    + name_constraints() : NameConstraints
+  }
+
+  enum CertProfile {
+    Server
+    Client
+    ServerClient
+  }
+
+  enum KeyAlgorithm {
+    EcdsaP256
+    EcdsaP384
+    Rsa2048
+    Rsa3072
+    Ed25519
+  }
+
+  class CsrRequest {
+    csr_pem : String
+    profile : CertProfile
+    validity_days : Option<u32>
+  }
+
+  class KeygenRequest {
+    common_name : Option<String>
+    dns_names : Vec<String>
+    ip_addresses : Vec<IpAddr>
+    profile : CertProfile
+    validity_days : Option<u32>
+    key_algorithm : KeyAlgorithm
+  }
+
+  class IssuedCertificate {
+    serial : String
+    common_name : String
+    dns_names / ip_addresses
+    not_before / not_after
+    fingerprint_sha256
+    cert_pem
+  }
+
+  class VerificationReport {
+    valid : bool
+    checks : Vec<Check>
+    revocation : RevocationStatus
+  }
+
+  interface RevocationLookup {
+    + status(serial) : RevocationStatus
+  }
+
+  enum RevocationStatus {
+    Good
+    Revoked{at, reason}
+    Unknown
+  }
+}
+
+package zenv_ca_store {
+  class Store {
+    + insert_certificate(cert, method, by)
+    + revoke(serial, reason, actor) : RevokeOutcome
+    + crl_entries() : Vec<RevokedEntry>
+    + next_crl_number() : u64
+    + create_token(name, role) : (TokenInfo, secret)
+    + authenticate(token) : Option<Principal>
+    + verify_audit_chain() : AuditVerification
+  }
+  class CertificateRecord {
+    status : Active | Revoked | Expired
+    requested_by : String
+    issuance_method : Csr | Keygen
+  }
+  class Principal {
+    name : String
+    role : Requester | Admin
+  }
+  class AuditRecord {
+    id, ts, actor, action, target
+    prev_hash, hash
+  }
+}
+
+CertificateAuthority *-- IssuancePolicy
+CertificateAuthority ..> CsrRequest
+CertificateAuthority ..> KeygenRequest
+CertificateAuthority ..> IssuedCertificate : creates
+CertificateAuthority ..> VerificationReport : creates
+CertificateAuthority ..> RevocationLookup : uses
+CsrRequest --> CertProfile
+KeygenRequest --> CertProfile
+KeygenRequest --> KeyAlgorithm
+RevocationLookup ..> RevocationStatus
+Store ..|> RevocationLookup
+Store "1" o-- "*" CertificateRecord
+Store "1" o-- "*" AuditRecord
+Store ..> Principal : authenticates
+CertificateRecord ..> IssuedCertificate : persists
+@enduml

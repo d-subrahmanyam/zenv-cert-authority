@@ -1,0 +1,28 @@
+@startuml seq-issue-keygen
+!theme plain
+title UC2: Server-side key generation with PKCS#12 download
+autonumber
+
+actor "User (browser UI)" as U
+participant "Web UI (app.js)" as UI
+participant "zenv-cad" as API
+participant "CertificateAuthority" as CA
+participant "export" as EX
+database "Store" as DB
+
+U -> UI : DNS names, profile, algorithm,\nPKCS#12 password
+UI -> API : POST /api/v1/certificates/keygen
+API -> CA : issue_with_generated_key(req)
+CA -> CA : policy.allow_server_side_keygen?
+CA -> CA : generate key (OS CSPRNG)
+CA -> CA : policy checks + sign
+CA --> API : (IssuedCertificate, KeyPair)
+API -> EX : pkcs12_bundle(cert, key, chain, password)\nAES-256-CBC + HMAC-SHA256
+alt password too short
+  API --> UI : 422 (nothing recorded)
+end
+API -> DB : insert_certificate(method=keygen) + audit
+API --> UI : 201 {certificate, private_key_pem, pkcs12_base64}\nCache-Control: no-store
+note over API : KeyPair dropped (zeroized);\nthe CA keeps NO copy
+UI -> U : download .p12 / .key as Blob\n("save it now, it cannot be re-downloaded")
+@enduml

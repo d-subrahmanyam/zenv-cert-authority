@@ -1,0 +1,63 @@
+# Zenv DMZ Certificate Authority: example configuration.
+#
+# Copy to /etc/zenv-ca/zenv-ca.toml (root:zenv-ca, 0640) and adjust.
+# Every key is documented in docs/operations.md.
+
+[server]
+listen = "0.0.0.0:8443"
+# Externally reachable URL (no trailing slash). Embedded into every certificate as the
+# CRL Distribution Point, so choose it carefully: changing it later only affects new certs.
+public_url = "https://ca.dmz.zenv.internal:8443"
+max_body_bytes = 65536
+request_timeout_secs = 30
+
+[server.tls]
+# The daemon serves HTTPS with a certificate issued by its own intermediate during
+# `zenv-ca init`. Disable only behind a TLS-terminating reverse proxy.
+enabled = true
+# cert = "/var/lib/zenv-ca/tls/server.chain.pem"
+# key  = "/var/lib/zenv-ca/tls/server.key"
+
+[paths]
+data_dir = "/var/lib/zenv-ca"
+
+[ca]
+# Prefer systemd credentials: LoadCredential=intermediate-passphrase:/etc/zenv-ca/intermediate.pass
+# intermediate_passphrase_file = "/etc/zenv-ca/intermediate.pass"
+tls_hostnames = ["ca.dmz.zenv.internal"]
+
+[ca.root]
+validity_days = 3650
+key_algorithm = "ecdsa-p384"
+
+[ca.root.subject]
+common_name = "Zenv DMZ Root CA"
+organization = "Zenv"
+organizational_unit = "DMZ Non-Production"
+
+[ca.intermediate]
+validity_days = 1095
+key_algorithm = "ecdsa-p384"
+
+[ca.intermediate.subject]
+common_name = "Zenv DMZ Issuing CA 1"
+organization = "Zenv"
+organizational_unit = "DMZ Non-Production"
+
+[policy]
+# Names certificates may be issued for. Also written into the intermediate certificate
+# as X.509 Name Constraints at `init` time.
+allowed_dns_suffixes = ["dmz.zenv.internal"]
+# allowed_ip_networks = ["10.20.0.0/16"]
+default_validity_days = 30
+max_validity_days = 90
+allow_wildcards = false
+allow_server_side_keygen = true
+max_sans = 20
+
+[crl]
+validity_hours = 168
+
+[logging]
+format = "pretty"   # or "json"
+filter = "info,tower_http=info"

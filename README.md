@@ -1,0 +1,103 @@
+# Zenv DMZ Certificate Authority
+
+A small, self-hosted **certificate authority daemon written in Rust** for Zenv's DMZ / pre-production zone. Teams get TLS certificates for their apps through a **self-service web UI** or a **REST API**. The CA publishes a **CRL** and **verification endpoints** so DMZ clients and humans can check whether a certificate is valid, revoked or foreign.
+
+> ⚠️ **Non-production.** This hierarchy is deliberately separate from production PKI. Never install its root in production trust stores.
+
+```mermaid
+flowchart LR
+    Dev[Developer / CI] -- "CSR or keygen<br/>(Bearer token)" --> CAD[zenv-cad]
+    CAD -- "cert · chain · PKCS#12" --> Dev
+    Dev -- deploy --> App[DMZ app]
+    Client[DMZ client<br/>trusts root.crt] -- TLS --> App
+    Client -- "CRL / verify / status" --> CAD
+```
+
+## Features
+
+- **Two-tier PKI**: offline-intended root plus an online intermediate with **X.509 Name Constraints** (it cannot vouch for names outside your DMZ namespace).
+- **CSR-first issuance**: the requester keeps the private key. Only the CSR's key and names are used; everything else comes from fixed **profiles** (`server`, `client`, `server-client`).
+- **Server-side keygen** (optional): ECDSA P-256/P-384, RSA 2048/3072 or Ed25519. The key is returned **once** as PEM and as a password-protected **PKCS#12**; the CA keeps no copy.
+- **Policy engine**: allowed DNS suffixes (label-boundary aware), IP networks, wildcard opt-in, max SANs, default and max lifetime.
+- **Download formats**: PEM, DER, chain (leaf + intermediate), full chain, PKCS#12.
+- **Validation**:
+  - CRL at a URL embedded in every certificate
+  - JSON status API
+  - verify API that reports each check: signature, chain, validity, basic constraints, name constraints, live revocation, host name
+- **Security**:
+  - Bearer tokens stored only as hashes; requester and admin roles; ownership checks
+  - CA keys encrypted at rest (PBES2 / PBKDF2-SHA256 / AES-256)
+  - Hardened systemd unit
+  - Strict CSP and security headers
+- **Tamper-evident audit**: an append-only, hash-chained log, written in the same transaction as every change.
+- **Ops**: health and readiness probes, JSON logs, expiry warnings, graceful shutdown, admin CLI.
+
+## Repository layout
+
+```
+crates/
+  zenv-ca-core/    domain logic (no I/O): hierarchy, policy, issuance, CRL, verify, export, keys
+  zenv-ca-store/   SQLite: inventory, tokens, hash-chained audit log
+  zenv-ca-server/  zenv-cad daemon: axum API, embedded web UI (ui/), TLS
+  zenv-ca-cli/     zenv-ca admin CLI: init, token, cert, tls, audit
+config/            example (prod-like) and dev configs
+deploy/            hardened systemd unit, Containerfile
+docs/              architecture, use cases, flows, security, API, operations, ADRs, UML
+scripts/           diagram tooling
+```
+
+## Quick start (local, plain HTTP)
+
+```bash
+export ZENV_CA_CONFIG=config/zenv-ca.dev.toml
+export ZENV_CA_INTERMEDIATE_PASSPHRASE_FILE=dev-data.intermediate.pass
+printf 'dev-intermediate-pass' > dev-data.intermediate.pass
+printf 'dev-root-passphrase!!' > dev-data.root.pass
+
+cargo run --bin zenv-ca -- init --root-passphrase-file dev-data.root.pass   # prints an admin token
+cargo run --bin zenv-cad                                                    # http://127.0.0.1:8080
+```
+
+Open <http://127.0.0.1:8080>, paste the token, and request a certificate. Or use the API:
+
+```bash
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout app.key -out app.csr \
+  -subj "/CN=app.dmz.zenv.internal" -addext "subjectAltName=DNS:app.dmz.zenv.internal"
+jq -n --rawfile csr app.csr '{csr_pem:$csr}' |
+  curl -sS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d @- \
+       http://127.0.0.1:8080/api/v1/certificates
+```
+
+For a real deployment (HTTPS, systemd, offline root) follow [docs/operations.md](docs/operations.md).
+
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [Architecture](docs/architecture.md) | context, components, PKI hierarchy, data model, runtime, deployment |
+| [Use cases](docs/use-cases.md) | actors, use-case diagram, UC1–UC13 specifications |
+| [Flows](docs/flows.md) | sequence diagrams (bootstrap, issuance, keygen, TLS validation, verify, revocation), lifecycle state machine |
+| [Security](docs/security.md) | assets, trust boundaries, STRIDE, crypto choices, checklist |
+| [API](docs/api.md) | endpoint reference with curl examples |
+| [Operations](docs/operations.md) | install, bootstrap, config reference, monitoring, backups, runbooks |
+| [Roadmap](docs/roadmap.md) | ACME, OIDC, OCSP, HSM, metrics, … |
+| [ADRs](docs/adr/) | key design decisions |
+| [UML](docs/uml/) | PlantUML: use cases, components, deployment, class, sequences, state |
+
+Diagrams: the Mermaid diagrams render inline on GitHub. `python3 scripts/build-diagram-viewer.py` regenerates [`docs/diagrams.html`](docs/diagrams.html), a single page with all of them. `scripts/render-uml.sh` renders the PlantUML sources to SVG using `plantuml`, or a container if `plantuml` isn't installed.
+
+## Development
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace          # unit + integration tests (core lifecycle, store, HTTP API)
+```
+
+Engineering conventions:
+- `unsafe` is forbidden; `unwrap`/`expect` are linted outside tests.
+- Pure core, I/O at the edges.
+- Every state change is audited in the same transaction.
+- Blocking work runs in `spawn_blocking`.
+- Errors are RFC 9457 problem+json, and internal details are logged, never returned.
+- CI runs fmt, clippy, tests, docs and `cargo-deny`.

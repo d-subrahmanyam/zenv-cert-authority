@@ -1,0 +1,29 @@
+@startuml seq-tls-validation
+!theme plain
+title UC8: How a relying party validates a DMZ certificate at runtime
+autonumber
+
+participant "Client app\n(trust store has root.crt)" as C
+participant "DMZ server app\n(presents leaf + intermediate)" as S
+participant "zenv-cad\n/pki/crl.der" as CRL
+
+C -> S : TLS ClientHello (SNI = shop.dmz.zenv.internal)
+S --> C : Certificate: leaf + intermediate
+group Local path validation (no call to the CA)
+  C -> C : build chain leaf → intermediate → root (trust anchor)
+  C -> C : verify signatures, validity periods
+  C -> C : Basic Constraints / pathLen, Key Usage, EKU = serverAuth
+  C -> C : Name Constraints: SANs ⊆ dmz.zenv.internal
+  C -> C : host name matches a SAN (RFC 6125)
+end
+opt revocation checking enabled
+  C -> CRL : GET CRL Distribution Point URL\n(cached until nextUpdate)
+  CRL --> C : CRL signed by intermediate
+  C -> C : serial ∉ CRL?
+end
+alt all checks pass
+  C -> S : continue handshake
+else any check fails
+  C -> C : abort with certificate error
+end
+@enduml
