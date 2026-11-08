@@ -30,6 +30,7 @@ flowchart LR
   - Hardened systemd unit
   - Strict CSP and security headers
 - **Tamper-evident audit**: an append-only, hash-chained log, written in the same transaction as every change.
+- **Pluggable storage**: embedded SQLite by default, and PostgreSQL for several daemon instances. Both pass the same conformance suite.
 - **Ops**: health and readiness probes, JSON logs, expiry warnings, graceful shutdown, admin CLI.
 
 ## Repository layout
@@ -37,7 +38,9 @@ flowchart LR
 ```
 crates/
   zenv-ca-core/    domain logic (no I/O): hierarchy, policy, issuance, CRL, verify, export, keys
-  zenv-ca-store/   SQLite: inventory, tokens, hash-chained audit log
+  zenv-ca-store/            storage contract: CaStore trait, audit chain, tokens, conformance testkit
+  zenv-ca-store-sqlite/     SQLite backend (default)
+  zenv-ca-store-postgres/   PostgreSQL backend (feature `postgres`, for HA)
   zenv-ca-server/  zenv-cad daemon: axum API, embedded web UI (ui/), TLS
   zenv-ca-cli/     zenv-ca admin CLI: init, token, cert, tls, audit
 config/            example (prod-like) and dev configs
@@ -45,6 +48,19 @@ deploy/            hardened systemd unit, Containerfile
 docs/              architecture, use cases, flows, security, API, operations, ADRs, UML
 scripts/           diagram tooling
 ```
+
+Each crate has its own README with modules, usage examples and design notes:
+
+| Crate | Kind | README |
+|---|---|---|
+| `zenv-ca-core` | library | [crates/zenv-ca-core](crates/zenv-ca-core/README.md): PKI domain logic, API examples |
+| `zenv-ca-store` | library | [crates/zenv-ca-store](crates/zenv-ca-store/README.md): `CaStore` trait, shared audit/token logic, writing a backend |
+| `zenv-ca-store-sqlite` | library | [crates/zenv-ca-store-sqlite](crates/zenv-ca-store-sqlite/README.md): embedded default backend |
+| `zenv-ca-store-postgres` | library | [crates/zenv-ca-store-postgres](crates/zenv-ca-store-postgres/README.md): HA backend, TLS, least-privilege roles |
+| `zenv-ca-server` | library + `zenv-cad` | [crates/zenv-ca-server](crates/zenv-ca-server/README.md): config, passphrase sources, HTTP surface |
+| `zenv-ca-cli` | `zenv-ca` | [crates/zenv-ca-cli](crates/zenv-ca-cli/README.md): command reference |
+
+Dependencies point one way: `cli → server → store-{sqlite,postgres} → store → core`. Only `core` does crypto, and it does no I/O. Storage is pluggable: handlers see only `Arc<dyn CaStore>`, and backends are picked by Cargo feature and `[database] backend` ([ADR 0006](docs/adr/0006-pluggable-storage-backends.md)).
 
 ## Quick start (local, plain HTTP)
 
@@ -81,7 +97,7 @@ For a real deployment (HTTPS, systemd, offline root) follow [docs/operations.md]
 | [API](docs/api.md) | endpoint reference with curl examples |
 | [Operations](docs/operations.md) | install, bootstrap, config reference, monitoring, backups, runbooks |
 | [Roadmap](docs/roadmap.md) | ACME, OIDC, OCSP, HSM, metrics, … |
-| [ADRs](docs/adr/) | key design decisions |
+| [ADRs](docs/adr/) | key design decisions (incl. [0006 pluggable storage](docs/adr/0006-pluggable-storage-backends.md)) |
 | [UML](docs/uml/) | PlantUML: use cases, components, deployment, class, sequences, state |
 
 Diagrams: the Mermaid diagrams render inline on GitHub. `python3 scripts/build-diagram-viewer.py` regenerates [`docs/diagrams.html`](docs/diagrams.html), a single page with all of them. `scripts/render-uml.sh` renders the PlantUML sources to SVG using `plantuml`, or a container if `plantuml` isn't installed.
@@ -91,7 +107,12 @@ Diagrams: the Mermaid diagrams render inline on GitHub. `python3 scripts/build-d
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace          # unit + integration tests (core lifecycle, store, HTTP API)
+cargo test --workspace          # unit + integration tests (core lifecycle, store conformance on SQLite, HTTP API)
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# PostgreSQL backend against a disposable database (each test uses its own schema)
+ZENV_CA_TEST_POSTGRES_URL=postgresql://zenv:secret@127.0.0.1:5432/zenv_test \
+  cargo test --workspace --all-features
 ```
 
 Engineering conventions:

@@ -6,6 +6,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, bail, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -17,7 +18,8 @@ use zenv_ca_core::serial::normalise_serial;
 use zenv_ca_core::verify::openssl_fingerprint;
 use zenv_ca_core::{CertFormat, CertProfile, KeyAlgorithm, KeygenRequest, RevocationReason};
 use zenv_ca_server::config::{Config, passphrase_from_environment};
-use zenv_ca_store::{CertFilter, CertStatus, IssuanceMethod, RevokeOutcome, Role, Store};
+use zenv_ca_server::storage;
+use zenv_ca_store::{CaStore, CertFilter, CertStatus, IssuanceMethod, RevokeOutcome, Role};
 use zeroize::Zeroizing;
 
 #[derive(Debug, Parser)]
@@ -209,7 +211,7 @@ fn main() -> anyhow::Result<()> {
             let pass = intermediate_passphrase(&config, intermediate_passphrase_file.as_deref(), false)?;
             let ca = zenv_ca_server::load_authority(&config, pass.as_bytes())?;
             let store = open_store(&config)?;
-            issue_daemon_tls(&config, &ca, &store, true)?;
+            issue_daemon_tls(&config, &ca, &*store, true)?;
             println!("Restart zenv-cad to load the new certificate.");
             Ok(())
         }
@@ -219,14 +221,13 @@ fn main() -> anyhow::Result<()> {
 
 // ---------------------------------------------------------------- helpers
 
-fn open_store(config: &Config) -> anyhow::Result<Store> {
-    let path = config.paths.database();
+fn open_store(config: &Config) -> anyhow::Result<Arc<dyn CaStore>> {
     ensure!(
-        path.exists(),
-        "database {} not found; run `zenv-ca init` first",
-        path.display()
+        storage::is_provisioned(config)?,
+        "no CA found in {}; run `zenv-ca init` first",
+        storage::describe(config)
     );
-    Store::open(&path).context("cannot open database")
+    storage::open_store(config)
 }
 
 fn read_secret_file(path: &Path) -> anyhow::Result<Zeroizing<String>> {
@@ -317,10 +318,16 @@ fn init(
     actor: &str,
 ) -> anyhow::Result<()> {
     let paths = &config.paths;
-    if paths.root_cert().exists() || paths.database().exists() {
+    if paths.root_cert().exists() {
         bail!(
             "{} already contains a CA; refusing to overwrite it",
             paths.data_dir.display()
+        );
+    }
+    if storage::is_provisioned(config)? {
+        bail!(
+            "{} already contains CA records; refusing to overwrite them",
+            storage::describe(config)
         );
     }
 
@@ -370,7 +377,7 @@ fn init(
 
     // Round-trip through disk exactly like the daemon will, proving the files are usable.
     let ca = zenv_ca_server::load_authority(config, inter_pass.as_bytes())?;
-    let store = Store::open(&paths.database())?;
+    let store = storage::open_store(config)?;
     store.audit(
         actor,
         "ca.initialised",
@@ -382,7 +389,7 @@ fn init(
         }),
     )?;
     if config.server.tls.enabled {
-        issue_daemon_tls(config, &ca, &store, false)?;
+        issue_daemon_tls(config, &ca, &*store, false)?;
     } else {
         eprintln!("server.tls.enabled = false: skipping the daemon TLS certificate");
     }
@@ -392,6 +399,7 @@ fn init(
     println!("  Root CA          {}", paths.root_cert().display());
     println!("  Root SHA-256     {}", openssl_fingerprint(ca.root_der()));
     println!("  Intermediate     {}", paths.intermediate_cert().display());
+    println!("  Database         {}", storage::describe(config));
     println!(
         "  Name constraints {}",
         config.policy.allowed_dns_suffixes.join(", ")
@@ -413,7 +421,7 @@ fn init(
 fn issue_daemon_tls(
     config: &Config,
     ca: &zenv_ca_core::CertificateAuthority,
-    store: &Store,
+    store: &dyn CaStore,
     replace: bool,
 ) -> anyhow::Result<()> {
     let mut names = config.ca.tls_hostnames.clone();

@@ -19,7 +19,7 @@ sequenceDiagram
     participant CLI as zenv-ca CLI
     participant Core as zenv-ca-core
     participant FS as data_dir
-    participant DB as SQLite store
+    participant DB as Store (SQLite / PostgreSQL)
     Admin->>CLI: zenv-ca init --root-passphrase-file …
     CLI->>CLI: refuse if CA exists · passphrases ≥12 chars and different
     CLI->>FS: create data/, ca/, tls/ (0700)

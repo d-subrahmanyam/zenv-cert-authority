@@ -3,7 +3,9 @@ FROM docker.io/library/rust:1.99-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends cmake clang && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
-RUN cargo build --release --locked --bins
+# Both storage backends by default; pass --build-arg FEATURES= for a SQLite-only image.
+ARG FEATURES="zenv-ca-server/postgres,zenv-ca-cli/postgres"
+RUN cargo build --release --locked --bins --features "$FEATURES"
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /src/target/release/zenv-cad /src/target/release/zenv-ca /usr/local/bin/

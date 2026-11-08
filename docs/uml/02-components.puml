@@ -29,11 +29,19 @@ package "zenv-ca-core (library, no I/O)" {
   [keys\n(encrypted PKCS#8)] as Keys
 }
 
-package "zenv-ca-store (library)" {
-  [Store\n(inventory, tokens,\naudit, CRL number)] as Store
+package "zenv-ca-store (library, contract)" {
+  interface CaStore
+  [audit chain · tokens\nrow codec · testkit] as Shared
+}
+package "zenv-ca-store-sqlite" {
+  [SqliteStore] as Sqlite
+}
+package "zenv-ca-store-postgres" {
+  [PostgresStore\n(r2d2 pool, rustls)] as Pg
 }
 
 database "SQLite (WAL)\nzenv-ca.db" as DB
+database "PostgreSQL\n(shared, HA)" as PGDB
 folder "data_dir/ca\nroot.crt, intermediate.crt\n*.key.enc (PBES2)" as Files
 folder "data_dir/tls\nserver.chain.pem\nserver.key" as Tls
 
@@ -48,17 +56,22 @@ Router --> Handlers
 Handlers --> Auth
 Handlers --> State
 State --> CA
-State --> Store
+State --> CaStore
 Handlers --> Export
 Handlers --> Verify
 CA --> Policy
 CA --> Profile
 CA --> Keys
-Verify ..> Store : RevocationLookup
+Verify ..> CaStore : Revocations (fail closed)
 CLI --> Hier
-CLI --> Store
+CLI --> CaStore
 CLI --> CA
-Store --> DB
+Sqlite ..|> CaStore
+Pg ..|> CaStore
+Sqlite ..> Shared
+Pg ..> Shared
+Sqlite --> DB
+Pg --> PGDB
 Hier --> Files
 CA ..> Files : loaded at start-up
 Router ..> Tls : rustls

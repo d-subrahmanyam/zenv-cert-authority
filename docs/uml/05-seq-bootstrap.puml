@@ -8,7 +8,7 @@ participant "zenv-ca CLI" as CLI
 participant "hierarchy" as H
 participant "keys" as K
 participant "CertificateAuthority" as CA
-database "Store (SQLite)" as DB
+database "CaStore\n(SQLite or PostgreSQL)" as DB
 collections "data_dir" as FS
 
 Admin -> CLI : zenv-ca init --root-passphrase-file …

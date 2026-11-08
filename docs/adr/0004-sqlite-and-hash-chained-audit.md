@@ -14,4 +14,4 @@ Issuance volume is small (thousands/year). Operations want zero extra infrastruc
 ## Consequences
 + No external DB; trivial backups (`.backup`).
 + Tampering is detectable (`zenv-ca audit verify`); anchoring the head hash externally makes it provable.
-− Single-node. A PostgreSQL backend is on the roadmap for HA.
+− Single-node. Superseded in part by [ADR 0006](0006-pluggable-storage-backends.md): SQLite stays the default, and PostgreSQL is available for HA. The hash-chained audit design applies to both.

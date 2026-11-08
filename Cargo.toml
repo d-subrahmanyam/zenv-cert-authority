@@ -6,12 +6,14 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-repository = "https://example.invalid/zenv-cert-authority"
+repository = "https://github.com/d-subrahmanyam/zenv-cert-authority"
 publish = false
 
 [workspace.dependencies]
 zenv-ca-core = { path = "crates/zenv-ca-core" }
 zenv-ca-store = { path = "crates/zenv-ca-store" }
+zenv-ca-store-sqlite = { path = "crates/zenv-ca-store-sqlite" }
+zenv-ca-store-postgres = { path = "crates/zenv-ca-store-postgres" }
 
 rcgen = { version = "0.14", features = ["x509-parser", "pem", "crypto", "aws_lc_rs"], default-features = false }
 x509-parser = { version = "0.18", features = ["verify-aws"] }

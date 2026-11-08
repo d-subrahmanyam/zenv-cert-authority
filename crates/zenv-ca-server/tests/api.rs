@@ -12,7 +12,8 @@ use zenv_ca_core::hierarchy::{create_intermediate, create_root};
 use zenv_ca_core::*;
 use zenv_ca_server::routes::{Limits, router};
 use zenv_ca_server::state::AppState;
-use zenv_ca_store::{Role, Store};
+use zenv_ca_store::{CaStore, Role};
+use zenv_ca_store_sqlite::SqliteStore;
 
 struct Harness {
     app: Router,
@@ -53,11 +54,11 @@ fn harness() -> Harness {
         Some("https://ca.test/pki/crl.der".into()),
     )
     .unwrap();
-    let store = Store::open_in_memory().unwrap();
+    let store = SqliteStore::open_in_memory().unwrap();
     let (_, alice) = store.create_token("alice", Role::Requester, "test").unwrap();
     let (_, bob) = store.create_token("bob", Role::Requester, "test").unwrap();
     let (_, admin) = store.create_token("ops", Role::Admin, "test").unwrap();
-    let state = AppState::new(ca, store, time::Duration::days(7), true);
+    let state = AppState::new(ca, std::sync::Arc::new(store), time::Duration::days(7), true);
     Harness {
         app: router(state, Limits::default()),
         alice,

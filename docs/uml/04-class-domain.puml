@@ -85,15 +85,23 @@ package zenv_ca_core {
 }
 
 package zenv_ca_store {
-  class Store {
+  interface CaStore <<Send + Sync>> {
+    + backend() : &str
     + insert_certificate(cert, method, by)
     + revoke(serial, reason, actor) : RevokeOutcome
     + crl_entries() : Vec<RevokedEntry>
     + next_crl_number() : u64
+    + revocation_status(serial) : RevocationStatus
     + create_token(name, role) : (TokenInfo, secret)
     + authenticate(token) : Option<Principal>
     + verify_audit_chain() : AuditVerification
   }
+  class "Revocations<'a>" as Revocations {
+    fail-closed adapter
+  }
+  class ChainVerifier
+  class SqliteStore <<zenv-ca-store-sqlite>>
+  class PostgresStore <<zenv-ca-store-postgres>>
   class CertificateRecord {
     status : Active | Revoked | Expired
     requested_by : String
@@ -119,7 +127,11 @@ CsrRequest --> CertProfile
 KeygenRequest --> CertProfile
 KeygenRequest --> KeyAlgorithm
 RevocationLookup ..> RevocationStatus
-Store ..|> RevocationLookup
+Revocations ..|> RevocationLookup
+Revocations o-- CaStore
+SqliteStore ..|> CaStore
+PostgresStore ..|> CaStore
+CaStore ..> ChainVerifier : verify_audit_chain
 Store "1" o-- "*" CertificateRecord
 Store "1" o-- "*" AuditRecord
 Store ..> Principal : authenticates

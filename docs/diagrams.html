@@ -77,7 +77,7 @@ section h2 { margin:0; font-size:1.05rem; }
     participant CLI as zenv-ca CLI
     participant Core as zenv-ca-core
     participant FS as data_dir
-    participant DB as SQLite store
+    participant DB as Store (SQLite / PostgreSQL)
     Admin-&gt;&gt;CLI: zenv-ca init --root-passphrase-file …
     CLI-&gt;&gt;CLI: refuse if CA exists · passphrases ≥12 chars and different
     CLI-&gt;&gt;FS: create data/, ca/, tls/ (0700)
@@ -230,8 +230,11 @@ section h2 { margin:0; font-size:1.05rem; }
         Keys[keys]
         Hier[hierarchy]
     end
-    Store[&quot;zenv-ca-store&lt;br/&gt;inventory · tokens · audit&quot;]
+    Store[&quot;zenv-ca-store&lt;br/&gt;CaStore trait · audit chain · tokens&quot;]
+    Sqlite[&quot;zenv-ca-store-sqlite&quot;]
+    Pg[&quot;zenv-ca-store-postgres&quot;]
     DB[(SQLite WAL)]
+    PGDB[(PostgreSQL)]
     Files[[&quot;data_dir/ca&lt;br/&gt;certs + encrypted keys&quot;]]
 
     B --&gt; UI
@@ -241,7 +244,9 @@ section h2 { margin:0; font-size:1.05rem; }
     H --&gt; Ver &amp; Exp
     CA --&gt; Pol &amp; Prof &amp; Keys
     Adm --&gt; CLI --&gt; Hier &amp; Store &amp; CA
-    Store --&gt; DB
+    Store -. &quot;impl CaStore&quot; .- Sqlite &amp; Pg
+    Sqlite --&gt; DB
+    Pg --&gt; PGDB
     Hier --&gt; Files
 </pre></section>
 <section id="d9"><h2>4. PKI hierarchy</h2><p class="src">architecture.md</p><pre class="mermaid">flowchart TD

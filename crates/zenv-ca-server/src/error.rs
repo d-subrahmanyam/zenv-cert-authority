@@ -82,7 +82,18 @@ impl From<CaError> for ApiError {
 
 impl From<StoreError> for ApiError {
     fn from(e: StoreError) -> Self {
-        Self::internal(e)
+        match e {
+            // A duplicate (e.g. a 128-bit serial collision) is retryable; say so.
+            StoreError::Conflict(what) => {
+                tracing::warn!(%what, "store conflict");
+                Self::new(
+                    StatusCode::CONFLICT,
+                    "Conflict",
+                    "the record already exists; retry the request",
+                )
+            }
+            other => Self::internal(other),
+        }
     }
 }
 

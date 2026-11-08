@@ -14,6 +14,10 @@
 
 1. **Network → daemon**: TLS (rustls), bearer-token auth, body size limit (64 KiB), request timeout, strict JSON (`deny_unknown_fields`).
 2. **Daemon → disk**: data dir `0700`, keys `0600`, DB `0600`, intermediate key encrypted (PBES2: PBKDF2-HMAC-SHA256 600k + AES-256-CBC).
+2b. **Daemon → PostgreSQL** (optional backend):
+    - TLS via rustls, with the certificate and host name always verified; use `sslmode=require` so it can't silently fall back to plaintext
+    - password supplied as a systemd credential, never in the URL
+    - runtime role limited to DML: no `UPDATE`/`DELETE`/`TRUNCATE` on `audit_log`, and not the table owner, so it can't disable the trigger
 3. **Online ↔ offline**: root key is only needed for `init` and intermediate rotation and should live offline.
 4. **Browser → UI**: same-origin only (strict CSP, no inline script, `frame-ancestors 'none'`), DOM built with `textContent` only.
 
@@ -24,7 +28,8 @@
 | **S**poofing | Use a stolen/forged token | 256-bit random tokens; only SHA-256 hash stored; disable instantly (`zenv-ca token disable`); `last_used_at` tracking; failed auth logged |
 | **S**poofing | Get a cert for `login.bank.com` or another team's host | Policy: allowed DNS suffixes on label boundaries, IP networks, no wildcards by default; **Name Constraints** in the intermediate make out-of-scope certs invalid for RFC 5280 clients even if mis-issued |
 | **T**ampering | CSR asks for `CA:TRUE`, long lifetime, extra EKUs | Only the CSR's public key and names are used; everything else comes from the profile + policy; CSR self-signature is verified |
-| **T**ampering | Edit the inventory or erase audit evidence | Mutations and audit rows in one transaction; append-only triggers; hash chain detects edits even if triggers are dropped; export head hash to SIEM for external anchoring |
+| **T**ampering | Edit the inventory or erase audit evidence | Mutations and audit rows in one transaction; append-only triggers; hash chain detects edits even if triggers are dropped; export head hash to SIEM for external anchoring; on PostgreSQL the runtime role lacks the privileges to modify `audit_log` at all |
+| **T**ampering | Two daemon instances fork the audit chain | Audit appends serialised by a per-schema advisory lock; the conformance suite runs concurrent writers and requires one unbroken chain |
 | **R**epudiation | "I never requested that cert" | Every issuance/revocation records the principal, time, names and fingerprint in the audit chain |
 | **I**nformation disclosure | Enumerate other teams' certificates | Requesters see only their own; foreign serials return `404` (not `403`) |
 | **I**nformation disclosure | Private key leakage | CSR-first; keygen responses `Cache-Control: no-store`; keys zeroized in memory; never logged; never persisted |
@@ -53,7 +58,8 @@
 - [ ] Give each team/pipeline its own `requester` token; keep `admin` tokens few.
 - [ ] Ship JSON logs to the SIEM; alert on `rejected invalid bearer token`, `certificate revoked`, `audit chain BROKEN`.
 - [ ] Periodically export `zenv-ca audit verify` head hash to an external system.
-- [ ] Back up `/var/lib/zenv-ca` (encrypted) and test restores.
+- [ ] Back up `/var/lib/zenv-ca` (encrypted), plus the PostgreSQL schema if used, and test restores.
+- [ ] PostgreSQL only: separate owner and app roles, `sslmode=require`, password via `LoadCredential=database-password:…`.
 
 ## Known limitations (see [roadmap](roadmap.md))
 

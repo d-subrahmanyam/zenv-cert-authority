@@ -1,8 +1,9 @@
 //! Forward-only schema migrations tracked with `PRAGMA user_version`.
 
 use rusqlite::Connection;
+use zenv_ca_store::StoreError;
 
-use crate::error::{StoreError, StoreResult};
+use crate::Error;
 
 /// Ordered list of migrations; index + 1 is the resulting schema version.
 const MIGRATIONS: &[&str] = &[r"
@@ -64,11 +65,11 @@ CREATE TABLE crl_state (
 INSERT INTO crl_state (id, crl_number) VALUES (1, 0);
 "];
 
-pub(crate) fn migrate(conn: &Connection) -> StoreResult<()> {
+pub(crate) fn migrate(conn: &Connection) -> Result<(), Error> {
     let current: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     let target = i64::try_from(MIGRATIONS.len()).unwrap_or(i64::MAX);
     if current > target {
-        return Err(StoreError::SchemaTooNew(current));
+        return Err(StoreError::SchemaTooNew(current).into());
     }
     for (index, sql) in MIGRATIONS
         .iter()

@@ -52,8 +52,11 @@ flowchart TB
         Keys[keys]
         Hier[hierarchy]
     end
-    Store["zenv-ca-store<br/>inventory · tokens · audit"]
+    Store["zenv-ca-store<br/>CaStore trait · audit chain · tokens"]
+    Sqlite["zenv-ca-store-sqlite"]
+    Pg["zenv-ca-store-postgres"]
     DB[(SQLite WAL)]
+    PGDB[(PostgreSQL)]
     Files[["data_dir/ca<br/>certs + encrypted keys"]]
 
     B --> UI
@@ -63,18 +66,24 @@ flowchart TB
     H --> Ver & Exp
     CA --> Pol & Prof & Keys
     Adm --> CLI --> Hier & Store & CA
-    Store --> DB
+    Store -. "impl CaStore" .- Sqlite & Pg
+    Sqlite --> DB
+    Pg --> PGDB
     Hier --> Files
 ```
 
+Each crate name links to its README (modules, usage examples, design notes).
+
 | Crate | Responsibility | Depends on |
 |---|---|---|
-| `zenv-ca-core` | Hierarchy bootstrap, policy, profiles, issuance, CRL building, verification, export formats, key encryption. **No I/O**, fully unit-testable. | rcgen, x509-parser, p12-keystore, pkcs8 |
-| `zenv-ca-store` | SQLite persistence: inventory, tokens (hashed), hash-chained audit log, CRL number. Every mutation + its audit row in one transaction. | core, rusqlite |
-| `zenv-ca-server` | `zenv-cad` binary + library: config, auth, routes, UI, TLS, graceful shutdown. | core, store, axum, axum-server (rustls) |
-| `zenv-ca-cli` | `zenv-ca` binary: `init`, `token`, `cert`, `tls`, `audit`. | core, store, server (config) |
+| [`zenv-ca-core`](../crates/zenv-ca-core/README.md) | Hierarchy bootstrap, policy, profiles, issuance, CRL building, verification, export formats, key encryption. **No I/O**, fully unit-testable. | rcgen, x509-parser, p12-keystore, pkcs8 |
+| [`zenv-ca-store`](../crates/zenv-ca-store/README.md) | Storage **contract**: the object-safe `CaStore` trait, record types, and the logic every backend must share: audit hash chain, token hashing, row encoding, fail-closed `Revocations`, plus a conformance test kit. No database dependency. | core |
+| [`zenv-ca-store-sqlite`](../crates/zenv-ca-store-sqlite/README.md) | `SqliteStore`: embedded file, WAL, `BEGIN IMMEDIATE` writes. Default backend. | store, rusqlite |
+| [`zenv-ca-store-postgres`](../crates/zenv-ca-store-postgres/README.md) | `PostgresStore`: r2d2 pool, rustls TLS, advisory-locked audit appends for multi-instance deployments. | store, postgres, rustls |
+| [`zenv-ca-server`](../crates/zenv-ca-server/README.md) | `zenv-cad` binary + library: config, auth, routes, UI, TLS, graceful shutdown, and `storage::open_store`, which picks the backend. | core, store, backends (Cargo features), axum, axum-server (rustls) |
+| [`zenv-ca-cli`](../crates/zenv-ca-cli/README.md) | `zenv-ca` binary: `init`, `token`, `cert`, `tls`, `audit`. | core, store, server (config + storage) |
 
-Dependency direction is strictly `cli/server → store → core`; core knows nothing about HTTP or SQL.
+Dependencies point one way: `cli → server → store-{sqlite,postgres} → store → core`. Core knows nothing about HTTP or SQL. Handlers and the CLI see only `Arc<dyn CaStore>`. The backend crates are referenced in a single module (`zenv-ca-server/src/storage.rs`), behind Cargo features `sqlite` (default) and `postgres`, and chosen at runtime by `[database] backend`. See [ADR 0006](adr/0006-pluggable-storage-backends.md).
 
 ## 4. PKI hierarchy
 
@@ -157,8 +166,9 @@ erDiagram
 
 ## 6. Runtime model
 
-- **tokio** multi-threaded runtime; all signing, key generation (RSA can take 100+ ms) and SQLite calls run in `spawn_blocking`, so the async executor never stalls.
-- **One SQLite connection** behind a mutex (SQLite serialises writers anyway; operations are µs). WAL mode, `synchronous=FULL`, `busy_timeout=5s`.
+- **tokio** multi-threaded runtime. All signing, key generation (RSA can take 100+ ms) and every store call run in `spawn_blocking`, so the async executor never stalls. Store backends are synchronous by design; the PostgreSQL client must not run on an async worker thread.
+- **SQLite**: one connection per process behind a mutex (SQLite serialises writers anyway, and operations take µs). WAL mode, `synchronous=FULL`, `busy_timeout=5s`. Writes use `BEGIN IMMEDIATE`, so daemon and CLI writes queue rather than fail.
+- **PostgreSQL**: an r2d2 pool (`pool_size`, default 8). Each write transaction first takes `pg_advisory_xact_lock(class, hashtext(schema))`, which serialises audit appends across **all** daemon instances so the hash chain never forks. CRL numbers come from a single-row `UPDATE … RETURNING`, so they stay monotonic across instances.
 - **CRL cache**: re-signed when half its validity has passed **or** the revocation revision (`count, max(revoked_at)`) changes, which also catches CLI revocations.
 - **Graceful shutdown** on SIGTERM/SIGINT with a 10 s drain.
 - **Expiry monitor**: every 12 h, logs a warning for each active cert expiring within 14 days.
@@ -197,3 +207,4 @@ See [operations.md](operations.md) for the systemd unit, backups and runbooks.
 | [0003](adr/0003-csr-first-issuance.md) | CSR-first issuance; keygen as an opt-out convenience that keeps no keys |
 | [0004](adr/0004-sqlite-and-hash-chained-audit.md) | SQLite + hash-chained append-only audit log |
 | [0005](adr/0005-crl-and-status-api-before-ocsp.md) | CRL + JSON status API now; OCSP and ACME on the roadmap |
+| [0006](adr/0006-pluggable-storage-backends.md) | Storage behind a `CaStore` trait; SQLite and PostgreSQL as separate crates selected by feature + config |

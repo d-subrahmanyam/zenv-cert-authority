@@ -61,3 +61,21 @@ validity_hours = 168
 [logging]
 format = "pretty"   # or "json"
 filter = "info,tower_http=info"
+
+# Storage backend. SQLite (default) needs nothing else; the file lives in data_dir.
+[database]
+backend = "sqlite"
+# path = "/var/lib/zenv-ca/zenv-ca.db"
+
+# PostgreSQL, for several zenv-cad instances or a managed database. The binaries must be
+# built with `--features zenv-ca-server/postgres,zenv-ca-cli/postgres`. See
+# docs/operations.md ("PostgreSQL backend") for the owner/app role setup.
+#
+# [database]
+# backend = "postgres"
+# url = "postgresql://zenv_ca_app@db.dmz.zenv.internal:5432/zenv_ca?sslmode=require"
+# schema = "zenv_ca"
+# password_file = "/etc/zenv-ca/db-app.pass"   # or LoadCredential=database-password:...
+# tls_ca_file = "/etc/zenv-ca/db-ca.pem"        # default: OS trust store
+# pool_size = 8
+# connect_timeout_secs = 10

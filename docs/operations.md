@@ -3,7 +3,8 @@
 ## Install
 
 ```bash
-cargo build --release --locked
+cargo build --release --locked                     # SQLite only (default)
+# cargo build --release --locked --features zenv-ca-server/postgres,zenv-ca-cli/postgres
 sudo install -m 0755 target/release/zenv-cad target/release/zenv-ca /usr/local/bin/
 sudo useradd --system --home /var/lib/zenv-ca --shell /usr/sbin/nologin zenv-ca
 sudo install -d -m 0750 -o root -g zenv-ca /etc/zenv-ca
@@ -61,10 +62,75 @@ See the commented [`config/zenv-ca.example.toml`](../config/zenv-ca.example.toml
 | `policy.max_sans` | `20` | |
 | `crl.validity_hours` | `168` | re-signed at half-life or on revocation |
 | `logging.format` | `pretty` | `json` for SIEM; `RUST_LOG` overrides `filter` |
+| `database.backend` | `sqlite` | `sqlite` or `postgres` (the backend must be compiled in) |
+| `database.path` | `<data_dir>/zenv-ca.db` | SQLite only |
+| `database.url` | (required for postgres) | libpq URL **without** password; add `sslmode=require` for remote hosts |
+| `database.password_file` | | prefer the systemd credential `database-password` |
+| `database.schema` | role's `search_path` | must exist; lower-case identifier |
+| `database.pool_size` | `8` | connections per daemon instance |
+| `database.connect_timeout_secs` | `10` | connect and pool checkout |
+| `database.tls_ca_file` | OS trust store | CA bundle for the database server's certificate (can be our own DMZ root) |
 
 Passphrase lookup order: `$ZENV_CA_INTERMEDIATE_PASSPHRASE_FILE` → `ca.intermediate_passphrase_file` → `$CREDENTIALS_DIRECTORY/intermediate-passphrase` → `$ZENV_CA_INTERMEDIATE_PASSPHRASE` (dev only).
 
+Database password lookup order: `$ZENV_CA_DATABASE_PASSWORD_FILE` → `database.password_file` → `$CREDENTIALS_DIRECTORY/database-password` → `$ZENV_CA_DATABASE_PASSWORD` (dev only).
+
 > Changing `policy.allowed_dns_suffixes` after `init` does **not** change the intermediate's Name Constraints. Widening the namespace requires a new intermediate.
+
+## PostgreSQL backend (optional)
+
+Use it for several daemon instances (HA) or when a managed database is required. Otherwise keep the default SQLite.
+
+**1. Roles and schema (least privilege).** The *owner* role runs migrations, only during `init` and upgrades. The *app* role runs the daemon and day-to-day CLI with DML only, so it can never rewrite the audit log or disable its trigger:
+
+```sql
+CREATE ROLE zenv_ca_owner LOGIN PASSWORD '…';
+CREATE ROLE zenv_ca_app   LOGIN PASSWORD '…';
+CREATE DATABASE zenv_ca OWNER zenv_ca_owner;
+\c zenv_ca
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+CREATE SCHEMA zenv_ca AUTHORIZATION zenv_ca_owner;
+GRANT USAGE ON SCHEMA zenv_ca TO zenv_ca_app;
+```
+
+**2. Bootstrap as the owner.** Use a config whose `[database]` names the owner role:
+
+```toml
+[database]
+backend = "postgres"
+url = "postgresql://zenv_ca_owner@db.dmz.zenv.internal:5432/zenv_ca?sslmode=require"
+password_file = "/etc/zenv-ca/db-owner.pass"
+schema = "zenv_ca"
+tls_ca_file = "/etc/zenv-ca/db-ca.pem"   # e.g. our own DMZ root, if it issued the DB cert
+```
+
+```bash
+sudo -u zenv-ca zenv-ca --config /etc/zenv-ca/zenv-ca.owner.toml init
+```
+
+**3. Grant the app role**, then point `/etc/zenv-ca/zenv-ca.toml` at `zenv_ca_app`:
+
+```sql
+SET ROLE zenv_ca_owner;
+GRANT SELECT, INSERT, UPDATE ON zenv_ca.certificates, zenv_ca.api_tokens TO zenv_ca_app;
+GRANT SELECT, UPDATE         ON zenv_ca.crl_state                       TO zenv_ca_app;
+GRANT SELECT, INSERT         ON zenv_ca.audit_log                       TO zenv_ca_app;
+GRANT SELECT                 ON zenv_ca.zenv_ca_schema_version          TO zenv_ca_app;
+```
+
+Re-check the grants after an upgrade that adds tables. Run upgrades with the owner config once; it applies migrations, and the app role refuses to.
+
+**4. Deliver the password** as a credential: uncomment `LoadCredential=database-password:…` in `zenv-cad.service`.
+
+**5. More instances.** Run each one with the same config and the **same** `data_dir/ca` material (certificates plus the encrypted intermediate key, distributed like any secret), behind one `public_url`. Instances coordinate through the database:
+- audit appends take an advisory lock;
+- CRL numbers come from one counter;
+- any instance re-signs the CRL when the revocation revision changes.
+
+Notes:
+- `sslmode=require` makes the connection fail rather than fall back to plaintext. The server certificate and host name are always verified (rustls), so `require` is as strict as libpq's `verify-full`. `prefer` falls back to plaintext when the server doesn't offer TLS, so don't use it for remote hosts. The daemon warns if you do.
+- Connection errors such as a wrong password, a TLS failure or an unknown database are reported at start-up with PostgreSQL's own message, not after a pool timeout.
+- `/readyz` returns `{"status":"ready","database":"postgres"}`.
 
 ## Monitoring
 
@@ -79,10 +145,13 @@ Passphrase lookup order: `$ZENV_CA_INTERMEDIATE_PASSPHRASE_FILE` → `ca.interme
 
 ## Backup & restore
 
-Back up `/var/lib/zenv-ca` (DB + certs + encrypted intermediate key) daily, encrypted. Use SQLite's online backup for consistency:
+Back up `/var/lib/zenv-ca` (certs + encrypted intermediate key, plus the DB for SQLite) daily, encrypted. Take a consistent database snapshot:
 
 ```bash
+# SQLite: online backup
 sqlite3 /var/lib/zenv-ca/zenv-ca.db ".backup '/backup/zenv-ca-$(date +%F).db'"
+# PostgreSQL: logical dump of the CA schema (or rely on the managed service's PITR)
+pg_dump --schema=zenv_ca --format=custom -f /backup/zenv-ca-$(date +%F).dump "$OWNER_URL"
 ```
 
 Restore: stop daemon → restore files with ownership `zenv-ca` and modes (`0700` dirs, `0600` keys/DB) → `zenv-ca audit verify` → start.

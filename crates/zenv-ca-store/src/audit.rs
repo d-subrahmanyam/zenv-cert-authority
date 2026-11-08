@@ -1,23 +1,27 @@
-//! Hash-chained, append-only audit log.
+//! Hash-chained, append-only audit log: the parts every backend must agree on.
 //!
-//! `hash = SHA-256(prev_hash | id | ts | actor | action | target | details)`, with the
-//! first entry chained to 64 zeros. Combined with the SQL triggers that block `UPDATE` and
-//! `DELETE`, tampering requires rewriting the file *and* recomputing every later hash;
-//! exporting the latest hash periodically (e.g. to the SIEM) makes even that detectable.
+//! `hash = SHA-256(prev_hash | id | ts | actor | action | target | details)`, each field
+//! followed by the 0x1f unit separator, with the first entry chained to 64 zeros.
+//!
+//! Backends only *store* entries. Hash computation ([`AuditRow::next`]) and chain
+//! verification ([`ChainVerifier`]) live here, so a log written by one backend verifies
+//! identically after migrating to another.
+//!
+//! **Backends must store `details` as the exact text produced here** (e.g. `TEXT`, not
+//! PostgreSQL `JSONB`, which re-serialises it and would break the hashes).
 
-use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::error::StoreResult;
-use crate::{Store, now_unix};
+use crate::now_unix;
 
-const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+/// `prev_hash` of the first entry.
+pub const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-/// One audit entry.
+/// One audit entry as returned to callers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditRecord {
-    /// Sequence number.
+    /// Sequence number (1, 2, 3, ... without gaps).
     pub id: i64,
     /// Unix timestamp.
     pub ts: i64,
@@ -35,20 +39,92 @@ pub struct AuditRecord {
     pub hash: String,
 }
 
-/// Result of [`Store::verify_audit_chain`].
+/// Result of [`CaStore::verify_audit_chain`](crate::CaStore::verify_audit_chain).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditVerification {
     /// Number of entries checked.
     pub entries: u64,
     /// `true` when the chain is intact.
     pub intact: bool,
-    /// First entry whose hash does not match, if any.
+    /// First entry whose hash or link does not match, if any.
     pub first_broken_id: Option<i64>,
     /// Hash of the newest entry (publish this externally as a checkpoint).
     pub head_hash: String,
 }
 
-fn entry_hash(
+/// An audit row exactly as stored (details as text). Also the shape of a new entry
+/// produced by [`AuditRow::next`] for a backend to `INSERT`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditRow {
+    /// Sequence number.
+    pub id: i64,
+    /// Unix timestamp.
+    pub ts: i64,
+    /// Actor.
+    pub actor: String,
+    /// Action.
+    pub action: String,
+    /// Target.
+    pub target: String,
+    /// JSON details, as the exact stored text.
+    pub details: String,
+    /// Previous hash.
+    pub prev_hash: String,
+    /// This entry's hash.
+    pub hash: String,
+}
+
+impl From<AuditRow> for AuditRecord {
+    fn from(r: AuditRow) -> Self {
+        Self {
+            id: r.id,
+            ts: r.ts,
+            actor: r.actor,
+            action: r.action,
+            target: r.target,
+            details: serde_json::from_str(&r.details).unwrap_or(serde_json::Value::String(r.details)),
+            prev_hash: r.prev_hash,
+            hash: r.hash,
+        }
+    }
+}
+
+impl AuditRow {
+    /// Builds the entry that follows `last`, the `(id, hash)` of the newest stored entry
+    /// (`None` for an empty log).
+    ///
+    /// The backend must read `last` and insert the result **inside the same transaction
+    /// as the change being audited**, while holding a lock that serialises appenders
+    /// (SQLite's write lock; an advisory lock on PostgreSQL).
+    pub fn next(
+        last: Option<(i64, String)>,
+        actor: &str,
+        action: &str,
+        target: &str,
+        details: &serde_json::Value,
+    ) -> Self {
+        let (id, prev_hash) = match last {
+            Some((id, hash)) => (id + 1, hash),
+            None => (1, GENESIS_HASH.to_owned()),
+        };
+        let ts = now_unix();
+        let details = details.to_string();
+        let hash = entry_hash(&prev_hash, id, ts, actor, action, target, &details);
+        Self {
+            id,
+            ts,
+            actor: actor.to_owned(),
+            action: action.to_owned(),
+            target: target.to_owned(),
+            details,
+            prev_hash,
+            hash,
+        }
+    }
+}
+
+/// Computes an entry's hash.
+pub fn entry_hash(
     prev: &str,
     id: i64,
     ts: i64,
@@ -73,120 +149,143 @@ fn entry_hash(
     hex::encode(h.finalize())
 }
 
-/// Appends an entry using an existing connection/transaction.
-pub(crate) fn append(
-    conn: &Connection,
-    actor: &str,
-    action: &str,
-    target: &str,
-    details: &serde_json::Value,
-) -> StoreResult<()> {
-    let last: Option<(i64, String)> = conn
-        .query_row(
-            "SELECT id, hash FROM audit_log ORDER BY id DESC LIMIT 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    let (id, prev) = match last {
-        Some((id, hash)) => (id + 1, hash),
-        None => (1, GENESIS.to_string()),
-    };
-    let ts = now_unix();
-    let details = details.to_string();
-    let hash = entry_hash(&prev, id, ts, actor, action, target, &details);
-    conn.execute(
-        "INSERT INTO audit_log (id, ts, actor, action, target, details, prev_hash, hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![id, ts, actor, action, target, details, prev, hash],
-    )?;
-    Ok(())
+/// Streaming verifier: feed rows in ascending `id` order, then call [`finish`](Self::finish).
+#[derive(Debug)]
+pub struct ChainVerifier {
+    expected_prev: String,
+    expected_id: i64,
+    entries: u64,
+    first_broken_id: Option<i64>,
 }
 
-impl Store {
-    /// Records an event that is not tied to another state change (e.g. a failed login).
-    pub fn audit(
-        &self,
-        actor: &str,
-        action: &str,
-        target: &str,
-        details: &serde_json::Value,
-    ) -> StoreResult<()> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        append(&tx, actor, action, target, details)?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Most recent audit entries, newest first.
-    pub fn audit_log(&self, limit: u32) -> StoreResult<Vec<AuditRecord>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT id, ts, actor, action, target, details, prev_hash, hash
-             FROM audit_log ORDER BY id DESC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map([limit], |r| {
-            let details: String = r.get(5)?;
-            Ok(AuditRecord {
-                id: r.get(0)?,
-                ts: r.get(1)?,
-                actor: r.get(2)?,
-                action: r.get(3)?,
-                target: r.get(4)?,
-                details: serde_json::from_str(&details).unwrap_or(serde_json::Value::String(details)),
-                prev_hash: r.get(6)?,
-                hash: r.get(7)?,
-            })
-        })?;
-        Ok(rows.collect::<Result<_, _>>()?)
-    }
-
-    /// Recomputes every hash and checks the links between entries.
-    pub fn verify_audit_chain(&self) -> StoreResult<AuditVerification> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT id, ts, actor, action, target, details, prev_hash, hash
-             FROM audit_log ORDER BY id ASC",
-        )?;
-        let mut rows = stmt.query([])?;
-        let mut expected_prev = GENESIS.to_string();
-        let mut expected_id = 1_i64;
-        let mut entries = 0_u64;
-        let mut first_broken_id = None;
-        while let Some(r) = rows.next()? {
-            let id: i64 = r.get(0)?;
-            let (ts, actor, action, target, details, prev, hash): (
-                i64,
-                String,
-                String,
-                String,
-                String,
-                String,
-                String,
-            ) = (
-                r.get(1)?,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-                r.get(5)?,
-                r.get(6)?,
-                r.get(7)?,
-            );
-            entries += 1;
-            let recomputed = entry_hash(&prev, id, ts, &actor, &action, &target, &details);
-            if first_broken_id.is_none() && (id != expected_id || prev != expected_prev || recomputed != hash)
-            {
-                first_broken_id = Some(id);
-            }
-            expected_prev = hash;
-            expected_id = id + 1;
+impl Default for ChainVerifier {
+    fn default() -> Self {
+        Self {
+            expected_prev: GENESIS_HASH.to_owned(),
+            expected_id: 1,
+            entries: 0,
+            first_broken_id: None,
         }
-        Ok(AuditVerification {
-            entries,
-            intact: first_broken_id.is_none(),
-            first_broken_id,
-            head_hash: expected_prev,
+    }
+}
+
+impl ChainVerifier {
+    /// Checks one row against the chain so far.
+    pub fn push(&mut self, row: &AuditRow) {
+        self.entries += 1;
+        let recomputed = entry_hash(
+            &row.prev_hash,
+            row.id,
+            row.ts,
+            &row.actor,
+            &row.action,
+            &row.target,
+            &row.details,
+        );
+        let ok = row.id == self.expected_id && row.prev_hash == self.expected_prev && recomputed == row.hash;
+        if !ok && self.first_broken_id.is_none() {
+            self.first_broken_id = Some(row.id);
+        }
+        self.expected_prev.clone_from(&row.hash);
+        self.expected_id = row.id + 1;
+    }
+
+    /// The verdict.
+    pub fn finish(self) -> AuditVerification {
+        AuditVerification {
+            entries: self.entries,
+            intact: self.first_broken_id.is_none(),
+            first_broken_id: self.first_broken_id,
+            head_hash: self.expected_prev,
+        }
+    }
+}
+
+/// Canonical audit actions and their `details` payloads, shared by all backends so the
+/// log reads the same whichever database produced it.
+pub mod events {
+    use serde_json::{Value, json};
+    use zenv_ca_core::{IssuedCertificate, RevocationReason};
+
+    use crate::{IssuanceMethod, Role};
+
+    /// A certificate was issued.
+    pub const CERT_ISSUED: &str = "certificate.issued";
+    /// A certificate was revoked.
+    pub const CERT_REVOKED: &str = "certificate.revoked";
+    /// An API token was created.
+    pub const TOKEN_CREATED: &str = "token.created";
+    /// An API token was disabled.
+    pub const TOKEN_DISABLED: &str = "token.disabled";
+    /// A CRL number was allocated (a CRL was signed).
+    pub const CRL_GENERATED: &str = "crl.generated";
+
+    /// Details for [`CERT_ISSUED`].
+    pub fn certificate_issued(cert: &IssuedCertificate, method: IssuanceMethod) -> Value {
+        json!({
+            "common_name": cert.common_name,
+            "dns_names": cert.dns_names,
+            "ip_addresses": cert.ip_addresses,
+            "profile": cert.profile.as_str(),
+            "method": method.as_str(),
+            "not_after": cert.not_after.unix_timestamp(),
+            "fingerprint_sha256": cert.fingerprint_sha256,
         })
+    }
+
+    /// Details for [`CERT_REVOKED`].
+    pub fn certificate_revoked(reason: RevocationReason) -> Value {
+        json!({ "reason": reason.as_str() })
+    }
+
+    /// Details for [`TOKEN_CREATED`].
+    pub fn token_created(role: Role, prefix: &str) -> Value {
+        json!({ "role": role.as_str(), "prefix": prefix })
+    }
+
+    /// Details for [`TOKEN_DISABLED`].
+    pub fn token_disabled() -> Value {
+        json!({})
+    }
+
+    /// Details for [`CRL_GENERATED`].
+    pub fn crl_generated(entries: usize) -> Value {
+        json!({ "entries": entries })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chain_detects_edits_and_gaps() {
+        let a = AuditRow::next(None, "x", "a", "t", &serde_json::json!({}));
+        let b = AuditRow::next(
+            Some((a.id, a.hash.clone())),
+            "x",
+            "b",
+            "t",
+            &serde_json::json!({"k": 1}),
+        );
+        let mut v = ChainVerifier::default();
+        v.push(&a);
+        v.push(&b);
+        let ok = v.finish();
+        assert!(ok.intact);
+        assert_eq!(ok.entries, 2);
+        assert_eq!(ok.head_hash, b.hash);
+
+        let mut edited = b.clone();
+        edited.actor = "mallory".into();
+        let mut v = ChainVerifier::default();
+        v.push(&a);
+        v.push(&edited);
+        assert_eq!(v.finish().first_broken_id, Some(2));
+
+        // Deleting the first entry breaks the chain at the new first row.
+        let mut v = ChainVerifier::default();
+        v.push(&b);
+        assert_eq!(v.finish().first_broken_id, Some(2));
     }
 }

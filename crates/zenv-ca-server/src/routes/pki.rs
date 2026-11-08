@@ -30,8 +30,15 @@ pub async fn healthz() -> Json<serde_json::Value> {
 
 /// `GET /readyz`: readiness (database reachable).
 pub async fn readyz(State(state): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
-    state.blocking(|s| Ok(s.store().ping()?)).await?;
-    Ok(Json(serde_json::json!({ "status": "ready" })))
+    let backend = state
+        .blocking(|s| {
+            s.store().ping()?;
+            Ok(s.store().backend())
+        })
+        .await?;
+    Ok(Json(
+        serde_json::json!({ "status": "ready", "database": backend }),
+    ))
 }
 
 /// `GET /pki/root.crt`

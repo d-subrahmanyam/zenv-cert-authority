@@ -1,0 +1,28 @@
+[package]
+name = "zenv-ca-store-postgres"
+description = "PostgreSQL backend for the Zenv DMZ CA store (shared database, multiple daemon instances)."
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zenv-ca-core.workspace = true
+zenv-ca-store.workspace = true
+postgres = "0.19"
+r2d2 = "0.8"
+r2d2_postgres = "0.18"
+tokio-postgres-rustls = { version = "0.14", features = ["aws-lc-rs"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rustls-native-certs = "0.8"
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+zenv-ca-store = { workspace = true, features = ["testkit"] }
+rand.workspace = true
+postgres = "0.19"
+
+[lints]
+workspace = true

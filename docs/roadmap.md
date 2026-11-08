@@ -25,6 +25,6 @@ Ordered by value for a DMZ CA. ✅ = done in v0.1.
 | 8 | **Intermediate rotation** with overlap | verify/CRL for both old and new intermediates | multi-issuer `CertificateAuthority` |
 | 9 | Built-in **rate limiting** | defence in depth | `tower_governor` per token / IP |
 | 10 | **PKCS#7 (.p7b)** chain download | Windows / some appliances | `cms` crate |
-| 11 | **PostgreSQL** backend | HA / multi-instance | trait the store; schema is plain SQL |
+| 11 | ~~**PostgreSQL** backend~~ | HA / multi-instance | **Done**: `zenv-ca-store-postgres`, see [ADR 0006](adr/0006-pluggable-storage-backends.md). Next: a `zenv-ca db migrate` command to copy SQLite → PostgreSQL |
 | 12 | Approval workflow | names outside a team's scope need an admin's approval | pending → approved state |
 | 13 | Container image + Helm chart | k8s DMZ clusters | distroless, read-only rootfs |

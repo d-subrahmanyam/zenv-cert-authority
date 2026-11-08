@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use time::{Duration, OffsetDateTime};
 use zenv_ca_core::{CertificateAuthority, CrlDocument};
-use zenv_ca_store::Store;
+use zenv_ca_store::CaStore;
 
 use crate::error::{ApiError, ApiResult};
 
@@ -23,7 +23,7 @@ struct CachedCrl {
 #[derive(Debug)]
 struct Inner {
     ca: CertificateAuthority,
-    store: Store,
+    store: Arc<dyn CaStore>,
     crl_cache: RwLock<Option<CachedCrl>>,
     crl_validity: Duration,
     tls_enabled: bool,
@@ -31,7 +31,12 @@ struct Inner {
 
 impl AppState {
     /// Builds the state.
-    pub fn new(ca: CertificateAuthority, store: Store, crl_validity: Duration, tls_enabled: bool) -> Self {
+    pub fn new(
+        ca: CertificateAuthority,
+        store: Arc<dyn CaStore>,
+        crl_validity: Duration,
+        tls_enabled: bool,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 ca,
@@ -48,9 +53,9 @@ impl AppState {
         &self.inner.ca
     }
 
-    /// The database.
-    pub fn store(&self) -> &Store {
-        &self.inner.store
+    /// The configured storage backend.
+    pub fn store(&self) -> &dyn CaStore {
+        &*self.inner.store
     }
 
     /// Whether the listener is HTTPS (controls HSTS).
@@ -58,8 +63,9 @@ impl AppState {
         self.inner.tls_enabled
     }
 
-    /// Runs CPU-heavy or blocking work (signing, key generation, SQLite) off the async
-    /// executor threads.
+    /// Runs CPU-heavy or blocking work (signing, key generation, every store call) off
+    /// the async executor threads. Store backends block, and the PostgreSQL client panics
+    /// if driven from an async worker, so **all** store access goes through here.
     pub async fn blocking<T, F>(&self, f: F) -> ApiResult<T>
     where
         F: FnOnce(&AppState) -> ApiResult<T> + Send + 'static,

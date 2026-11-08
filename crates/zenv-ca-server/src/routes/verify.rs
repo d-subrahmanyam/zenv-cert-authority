@@ -10,6 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use zenv_ca_core::serial::normalise_serial;
 use zenv_ca_core::{RevocationStatus, VerificationReport, VerifyOptions};
+use zenv_ca_store::Revocations;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -51,7 +52,7 @@ pub async fn verify(
         at: body.at,
     };
     let report = state
-        .blocking(move |s| Ok(s.ca().verify(&input, &options, s.store())))
+        .blocking(move |s| Ok(s.ca().verify(&input, &options, &Revocations(s.store()))))
         .await?;
     Ok(Json(report))
 }

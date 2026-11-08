@@ -7,3 +7,6 @@
 *.p12
 *.pass
 /dev-data/
+# IDE
+.idea/
+.vscode/

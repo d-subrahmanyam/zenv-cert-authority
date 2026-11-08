@@ -11,6 +11,7 @@ pub mod config;
 pub mod error;
 pub mod routes;
 pub mod state;
+pub mod storage;
 
 use anyhow::Context;
 use zenv_ca_core::CertificateAuthority;

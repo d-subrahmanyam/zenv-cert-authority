@@ -1,10 +1,16 @@
 [package]
 name = "zenv-ca-cli"
 description = "Admin CLI for the Zenv DMZ CA (zenv-ca): bootstrap, tokens, revocation, audit."
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+
+[features]
+default = ["sqlite"]
+sqlite = ["zenv-ca-server/sqlite"]
+postgres = ["zenv-ca-server/postgres"]
 
 [[bin]]
 name = "zenv-ca"
@@ -13,7 +19,7 @@ path = "src/main.rs"
 [dependencies]
 zenv-ca-core.workspace = true
 zenv-ca-store.workspace = true
-zenv-ca-server = { path = "../zenv-ca-server" }
+zenv-ca-server = { path = "../zenv-ca-server", default-features = false }
 anyhow.workspace = true
 clap.workspace = true
 rpassword.workspace = true

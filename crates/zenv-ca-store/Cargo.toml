@@ -1,14 +1,18 @@
 [package]
 name = "zenv-ca-store"
-description = "SQLite persistence for the Zenv DMZ CA: certificate inventory, API tokens and a tamper-evident audit log."
+description = "Storage contract for the Zenv DMZ CA: the CaStore trait, shared audit-chain/token/row logic and a backend conformance suite."
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# Backend-agnostic conformance tests, enabled by backend crates' dev-dependencies.
+testkit = []
+
 [dependencies]
 zenv-ca-core.workspace = true
-rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -18,10 +22,6 @@ rand.workspace = true
 time.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
-rusqlite.workspace = true
 
 [lints]
 workspace = true

@@ -1,93 +1,144 @@
 //! # zenv-ca-store
 //!
-//! SQLite-backed persistence for the CA daemon.
+//! The **storage contract** of the Zenv DMZ CA: the [`CaStore`] trait plus the types and
+//! logic that every backend must share. It has no database dependency itself; concrete
+//! backends live in their own crates and are selected at start-up:
 //!
-//! * **Certificate inventory**: every issued certificate (never private keys).
-//! * **API tokens**: stored as SHA-256 hashes only; plaintext is shown once at creation.
-//! * **Audit log**: append-only and *hash-chained*: each entry commits to the previous
-//!   one, so editing or deleting a row is detectable with [`Store::verify_audit_chain`].
+//! | Crate | Backend |
+//! |---|---|
+//! | `zenv-ca-store-sqlite` | embedded SQLite file (default, single host) |
+//! | `zenv-ca-store-postgres` | PostgreSQL (shared database, several daemon instances) |
 //!
-//! Every state change and its audit entry are written in **one transaction**, so the log
-//! can never disagree with the inventory.
+//! What lives here, so that backends cannot drift apart:
 //!
-//! SQLite (WAL mode) is plenty for a departmental CA; the schema is plain SQL so moving
-//! to PostgreSQL later is mechanical.
+//! * the audit hash chain ([`audit::AuditRow::next`], [`audit::ChainVerifier`]) and the
+//!   canonical audit events ([`audit::events`]);
+//! * token generation and hashing ([`tokens::NewToken`]);
+//! * the stored row format ([`certs::CertificateRow`]) and status derivation;
+//! * fail-closed revocation lookups ([`Revocations`]);
+//! * a backend-agnostic conformance suite (feature `testkit`) that every backend runs.
+//!
+//! ## Contract for implementers
+//!
+//! 1. Every mutating method writes its audit entry **in the same transaction** as the
+//!    change, and appends are serialised so the chain has no forks or gaps.
+//! 2. `details` is stored as the exact text from [`audit::AuditRow`].
+//! 3. Unique-constraint violations map to [`StoreError::Conflict`].
+//! 4. Methods are blocking. Async callers run them on a blocking thread pool.
+//! 5. The backend passes [`testkit`]'s conformance suite.
 
-mod audit;
-mod certs;
+pub mod audit;
+pub mod certs;
 mod error;
-mod schema;
-mod tokens;
+pub mod tokens;
 
-use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
+#[cfg(feature = "testkit")]
+pub mod testkit;
 
-use rusqlite::Connection;
+use std::fmt::Debug;
+
+use zenv_ca_core::{IssuedCertificate, RevocationLookup, RevocationReason, RevocationStatus, RevokedEntry};
 
 pub use audit::{AuditRecord, AuditVerification};
 pub use certs::{CertFilter, CertStatus, CertificateRecord, IssuanceMethod, RevokeOutcome};
 pub use error::{StoreError, StoreResult};
 pub use tokens::{Principal, Role, TokenInfo};
 
-/// Handle to the CA database. Cheap to share behind an `Arc`.
-///
-/// Access is serialised through a mutex: SQLite allows one writer at a time anyway and
-/// every operation here takes microseconds. Async callers should invoke these methods
-/// from `spawn_blocking`.
-#[derive(Debug)]
-pub struct Store {
-    conn: Mutex<Connection>,
-}
-
-impl Store {
-    /// Opens (creating if needed) the database at `path` and applies migrations.
-    /// On Unix the file is restricted to the owner (`0600`).
-    pub fn open(path: &Path) -> StoreResult<Self> {
-        let conn = Connection::open(path)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| StoreError::Io(e.to_string()))?;
-        }
-        Self::init(conn, true)
-    }
-
-    /// Opens a private in-memory database (tests, dry runs).
-    pub fn open_in_memory() -> StoreResult<Self> {
-        Self::init(Connection::open_in_memory()?, false)
-    }
-
-    fn init(conn: Connection, wal: bool) -> StoreResult<Self> {
-        if wal {
-            conn.pragma_update(None, "journal_mode", "WAL")?;
-        }
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.pragma_update(None, "synchronous", "FULL")?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        schema::migrate(&conn)?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
-    }
-
-    fn conn(&self) -> MutexGuard<'_, Connection> {
-        // A poisoned mutex only means another thread panicked mid-operation; SQLite's own
-        // transactions keep the data consistent, so continuing is safe.
-        self.conn
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-}
-
-fn now_unix() -> i64 {
+/// Current Unix time in seconds.
+pub fn now_unix() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
 
-impl Store {
-    /// Cheap liveness query used by the readiness probe.
-    pub fn ping(&self) -> StoreResult<()> {
-        self.conn().query_row("SELECT 1", [], |_| Ok(()))?;
-        Ok(())
+/// Persistence used by the daemon and the CLI. Object-safe: callers hold an
+/// `Arc<dyn CaStore>` and never name a concrete backend.
+///
+/// All methods block; call them from `spawn_blocking` in async code.
+pub trait CaStore: Send + Sync + Debug {
+    /// Short backend name for logs and `/api/v1/ca` (`"sqlite"`, `"postgres"`).
+    fn backend(&self) -> &'static str;
+
+    /// Cheap liveness query for the readiness probe.
+    fn ping(&self) -> StoreResult<()>;
+
+    // ---- certificate inventory -------------------------------------------------------
+
+    /// Records a newly issued certificate and its `certificate.issued` audit entry
+    /// atomically. A duplicate serial or fingerprint is a [`StoreError::Conflict`] and
+    /// leaves no audit entry behind.
+    fn insert_certificate(
+        &self,
+        cert: &IssuedCertificate,
+        method: IssuanceMethod,
+        requested_by: &str,
+    ) -> StoreResult<()>;
+
+    /// Fetches one certificate by canonical serial.
+    fn get_certificate(&self, serial: &str) -> StoreResult<Option<CertificateRecord>>;
+
+    /// Lists certificates, newest first.
+    fn list_certificates(&self, filter: &CertFilter) -> StoreResult<Vec<CertificateRecord>>;
+
+    /// Active certificates expiring within `days`, soonest first.
+    fn expiring_within(&self, days: u32) -> StoreResult<Vec<CertificateRecord>>;
+
+    /// Revokes a certificate (idempotent) and records the audit entry atomically.
+    fn revoke(&self, serial: &str, reason: RevocationReason, actor: &str) -> StoreResult<RevokeOutcome>;
+
+    /// Revoked, not-yet-expired certificates: exactly what belongs on the CRL.
+    fn crl_entries(&self) -> StoreResult<Vec<RevokedEntry>>;
+
+    /// `(revoked count, latest revocation time)`. Changes whenever anything is revoked,
+    /// by any process, so a cached CRL can be detected as stale.
+    fn revocation_revision(&self) -> StoreResult<(i64, i64)>;
+
+    /// Atomically increments and returns the CRL number (monotonic across restarts and
+    /// across daemon instances), auditing `crl.generated`.
+    fn next_crl_number(&self, actor: &str, revoked: usize) -> StoreResult<u64>;
+
+    /// Revocation status of a serial; [`RevocationStatus::Unknown`] if it is not ours.
+    fn revocation_status(&self, serial: &str) -> StoreResult<RevocationStatus>;
+
+    // ---- API tokens ------------------------------------------------------------------
+
+    /// Creates a token; returns its metadata and the plaintext, which is not recoverable
+    /// afterwards. A duplicate name is a [`StoreError::Conflict`].
+    fn create_token(&self, name: &str, role: Role, actor: &str) -> StoreResult<(TokenInfo, String)>;
+
+    /// Resolves a bearer token. Unknown, malformed or disabled tokens yield `None`.
+    fn authenticate(&self, token: &str) -> StoreResult<Option<Principal>>;
+
+    /// Lists all tokens.
+    fn list_tokens(&self) -> StoreResult<Vec<TokenInfo>>;
+
+    /// Disables a token by name; `false` when no active token had that name.
+    fn disable_token(&self, name: &str, actor: &str) -> StoreResult<bool>;
+
+    /// `true` when at least one admin token is active.
+    fn has_admin(&self) -> StoreResult<bool>;
+
+    // ---- audit log -------------------------------------------------------------------
+
+    /// Records an event that is not tied to another state change.
+    fn audit(&self, actor: &str, action: &str, target: &str, details: &serde_json::Value) -> StoreResult<()>;
+
+    /// Most recent audit entries, newest first.
+    fn audit_log(&self, limit: u32) -> StoreResult<Vec<AuditRecord>>;
+
+    /// Recomputes every hash (with [`audit::ChainVerifier`]) and checks the links.
+    fn verify_audit_chain(&self) -> StoreResult<AuditVerification>;
+}
+
+/// Adapts any [`CaStore`] to [`RevocationLookup`] for `CertificateAuthority::verify`,
+/// **failing closed**: a database error reports [`RevocationStatus::Unknown`], which the
+/// verifier treats as a failed check, never as "good".
+#[derive(Debug, Clone, Copy)]
+pub struct Revocations<'a>(pub &'a dyn CaStore);
+
+impl RevocationLookup for Revocations<'_> {
+    fn status(&self, serial: &str) -> RevocationStatus {
+        self.0.revocation_status(serial).unwrap_or_else(|e| {
+            tracing::error!(error = %e, backend = self.0.backend(), "revocation lookup failed");
+            RevocationStatus::Unknown
+        })
     }
 }

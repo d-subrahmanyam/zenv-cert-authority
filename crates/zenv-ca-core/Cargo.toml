@@ -1,6 +1,7 @@
 [package]
 name = "zenv-ca-core"
 description = "Domain logic for the Zenv DMZ certificate authority: hierarchy, policy, issuance, revocation, verification and export formats."
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

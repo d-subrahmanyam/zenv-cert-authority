@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 use zenv_ca_server::config::{Config, LogFormat, passphrase_from_environment};
 use zenv_ca_server::routes::{Limits, router};
 use zenv_ca_server::state::AppState;
-use zenv_ca_store::Store;
+use zenv_ca_server::storage;
 
 /// Zenv DMZ certificate authority daemon.
 #[derive(Debug, Parser)]
@@ -48,14 +48,25 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let ca = zenv_ca_server::load_authority(&config, passphrase.as_bytes())?;
     drop(passphrase);
-    let store = Store::open(&config.paths.database()).context("cannot open database")?;
 
-    let crl_validity = time::Duration::hours(i64::from(config.crl.validity_hours));
-    let state = AppState::new(ca, store, crl_validity, config.server.tls.enabled);
-    // Sign an initial CRL so the distribution point works from the first request.
-    state
-        .refresh_crl()
-        .map_err(|e| anyhow::anyhow!("cannot sign initial CRL: {e:?}"))?;
+    // Opening the store connects/migrates and the first CRL hits the database: blocking
+    // work that must not run on an async worker thread.
+    let state = {
+        let config = config.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<AppState> {
+            tracing::info!(database = %storage::describe(&config), "opening store");
+            let store = storage::open_store(&config)?;
+            let crl_validity = time::Duration::hours(i64::from(config.crl.validity_hours));
+            let state = AppState::new(ca, store, crl_validity, config.server.tls.enabled);
+            // Sign an initial CRL so the distribution point works from the first request.
+            state
+                .refresh_crl()
+                .map_err(|e| anyhow::anyhow!("cannot sign initial CRL: {e:?}"))?;
+            Ok(state)
+        })
+        .await
+        .context("start-up task panicked")??
+    };
     spawn_expiry_monitor(state.clone());
 
     let app = router(
